@@ -1,0 +1,11 @@
+black
+flake8
+flake8-black
+isort>=5.7
+pytest
+pytest-cov
+ptflops>=0.6.8
+numpy
+pytorch_lightning
+onnx~=1.12
+onnxruntime~=1.13
