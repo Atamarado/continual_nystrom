@@ -1,2 +1,5 @@
 # Exclude Pycharm idea
 .idea/
+
+# All data folders
+**/data/
