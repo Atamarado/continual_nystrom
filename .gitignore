@@ -3,3 +3,6 @@
 
 # All data folders
 **/data/
+
+# Weight files
+*.h5
