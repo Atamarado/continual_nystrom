@@ -11,7 +11,6 @@ import gdown
 import urllib.request
 import librosa
 import math
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pickle
@@ -19,18 +18,10 @@ import sys
 from ptflops import get_model_complexity_info # TODO: Check whether to use the version in continual_transformers
 from audioread import NoBackendError
 
-import continual as co
-from continual import RecyclingPositionalEncoding
-
-# from continual_transformers import (
-#     RecyclingPositionalEncoding,
-#     CoReSiTransformerEncoder,
-#     CoSiTransformerEncoder,
-# )
-
 
 from preprocess_sound import preprocess_sound
 from gtzan_config import *
+from models import NonCoVisionTransformer, CoVisionTransformer
 
 # ROOT_DIR = '.'
 # os.chdir(ROOT_DIR)
@@ -400,227 +391,7 @@ class TorchGTZANDataset(torch.utils.data.Dataset):
 INPUT_DIM = 128
 SEQ_LEN = 120
 
-class LearnedPositionalEncoding(nn.Module):
-    def __init__(self, max_position_embeddings, embedding_dim, seq_length):
-        super(LearnedPositionalEncoding, self).__init__()
-        self.pe = nn.Embedding(max_position_embeddings, embedding_dim)
-        self.seq_length = seq_length
-
-        self.register_buffer(
-            "position_ids",
-            torch.arange(max_position_embeddings).expand((1, -1)),
-        )
-
-    def forward(self, x, position_ids=None):
-        if position_ids is None:
-            position_ids = self.position_ids[:, : self.seq_length]
-
-        position_embeddings = self.pe(position_ids)
-        position_embeddings = torch.permute(position_embeddings, (0, 2, 1))
-        return x + position_embeddings
-
-def CoTransformerModel(
-    embed_dim,
-    depth,
-    heads,
-    mlp_dim,
-    dropout_rate=0.1,
-    sequence_len=64,
-):
-    encoder_layer = co.TransformerEncoderLayerFactory(
-        d_model=embed_dim,
-        nhead=heads,
-        dim_feedforward=mlp_dim,
-        dropout=dropout_rate,
-        activation=nn.GELU(),
-        sequence_len=sequence_len)
-    return co.TransformerEncoder(encoder_layer, num_layers=depth)
-
-# def CoTransformerModel(
-#     embed_dim,
-#     depth,
-#     heads,
-#     mlp_dim,
-#     dropout_rate=0.1,
-#     sequence_len=64,
-# ):
-#     assert depth in {1, 2}
-#
-#     if depth == 1:
-#         mha = co.RetroactiveMultiheadAttention(
-#             sequence_len=sequence_len,
-#             embed_dim=embed_dim,
-#             num_heads=heads,
-#             dropout=dropout_rate,
-#             add_bias_kv=False,
-#             device=None,
-#             dtype=None
-#         )
-#
-#
-#         # return CoSiTransformerEncoder(
-#         #     sequence_len=sequence_len,
-#         #     embed_dim=embed_dim,
-#         #     num_heads=heads,
-#         #     dropout=dropout_rate,
-#         #     in_proj_bias=False,
-#         #     query_index=-1,
-#         #     ff_hidden_dim=mlp_dim,
-#         #     ff_activation=nn.GELU(),
-#         #     device=None,
-#         #     dtype=None,
-#         # )
-#     else:
-#         # depth == 2
-#         # return CoReSiTransformerEncoder(
-#         #     sequence_len=sequence_len,
-#         #     embed_dim=embed_dim,
-#         #     num_heads=heads,
-#         #     dropout=dropout_rate,
-#         #     in_proj_bias=False,
-#         #     query_index=-1,
-#         #     ff_hidden_dim=mlp_dim,
-#         #     ff_activation=nn.GELU(),
-#         #     device=None,
-#         #     dtype=None,
-#         # )
-#
-#
-#         core = co.RetroactiveMultiheadAttention(
-#             sequence_len=sequence_len,
-#             embed_dim=embed_dim,
-#             num_heads=heads,
-#             dropout=dropout_rate,
-#             add_bias_kv=False,
-#             device=None,
-#             dtype=None
-#         )
-#
-#         cosi = co.SingleOutputMultiheadAttention(
-#             sequence_len=sequence_len,
-#             embed_dim=embed_dim,
-#             num_heads=heads,
-#             dropout=dropout_rate,
-#             add_bias_kv=False,
-#             device=None,
-#             dtype=None
-#         )
-#
-#         ff_hidden_dim = mlp_dim
-#
-#         ff = co.Sequential(
-#             co.Linear(embed_dim, ff_hidden_dim, channel_dim=1),
-#             nn.GELU(),
-#             nn.Dropout(p=dropout_rate),
-#             co.Linear(ff_hidden_dim, embed_dim, channel_dim=1),
-#             nn.Dropout(p=dropout_rate),
-#         )
-#
-#         def unity(x):
-#             return x
-#
-#         def squeeze_last(x):
-#             return x.squeeze(-1)
-#
-#         return co.Sequential(
-#             core,
-#             co.transformer.RetroactiveLambda(cosi, takes_time=True),
-#             co.Lambda(unity, None, squeeze_last, squeeze_last, takes_time=True)
-#             co.transformer.RetroactiveLambda(
-#                 nn.Sequential(
-#                     nn.LayerNorm(embed_dim),
-#                     co.transformer.Residual(ff),
-#                     nn.LayerNorm(embed_dim),
-#                 )
-#             ),
-#         )
-
-def CoVisionTransformer(
-    sequence_len,
-    input_dim,
-    embedding_dim,
-    attn_ff_hidden_dim,
-    out_dim,
-    num_heads,
-    num_layers,
-    dropout_rate=0.1,
-):
-
-    assert embedding_dim % num_heads == 0
-
-    linear_encoding = co.Linear(input_dim, embedding_dim, channel_dim=1)
-    position_encoding = RecyclingPositionalEncoding(
-        embedding_dim,
-        int(embedding_dim * 1.0),  # Change num pos enc to cycle between
-        forward_update_index_steps=1,
-    )
-
-    pe_dropout = nn.Dropout(p=dropout_rate)
-
-    encoder = CoTransformerModel(
-        embedding_dim,
-        num_layers,
-        num_heads,
-        attn_ff_hidden_dim,
-        dropout_rate,
-        sequence_len,
-    )
-    pre_head_ln = co.Lambda(nn.LayerNorm(embedding_dim), takes_time=False)
-    mlp_head = co.Linear(embedding_dim, out_dim, channel_dim=1)
-
-    return co.Sequential(
-        linear_encoding,
-        position_encoding,
-        pe_dropout,
-        encoder,
-        pre_head_ln,
-        mlp_head,
-    )
-
-def NonCoVisionTransformer(
-    sequence_len,
-    input_dim,
-    embedding_dim,
-    attn_ff_hidden_dim,
-    out_dim,
-    num_heads,
-    num_layers,
-    dropout_rate=0.1,
-):
-
-    assert embedding_dim % num_heads == 0
-
-    linear_encoding = co.Linear(input_dim, embedding_dim, channel_dim=1)
-    position_encoding = LearnedPositionalEncoding(
-        embedding_dim,
-        embedding_dim,
-        sequence_len
-    )
-
-    pe_dropout = nn.Dropout(p=dropout_rate)
-
-    encoder = CoTransformerModel(
-        embedding_dim,
-        num_layers,
-        num_heads,
-        attn_ff_hidden_dim,
-        dropout_rate,
-        sequence_len,
-    )
-    pre_head_ln = co.Lambda(nn.LayerNorm(embedding_dim), takes_time=False)
-    mlp_head = co.Linear(embedding_dim, out_dim, channel_dim=1)
-
-    return nn.Sequential(
-        linear_encoding,
-        position_encoding,
-        pe_dropout,
-        encoder,
-        pre_head_ln,
-        mlp_head,
-    )
-
-
-def calculate_accuracy(model, data_loader):
+def calculate_accuracy(model, data_loader, config):
     correct_count = 0
     total_count = 0
     with torch.no_grad():
@@ -630,7 +401,10 @@ def calculate_accuracy(model, data_loader):
             features = features.cuda()
             labels = labels.cuda()
             predicted_labels = model(features)
-            predicted_labels = torch.squeeze(predicted_labels, dim=-1)
+            if config["num_layers"] > 1:
+                predicted_labels = torch.squeeze(predicted_labels, dim=-1)
+            else:
+                predicted_labels = torch.mean(predicted_labels, dim=2)
             correct_count += torch.sum(torch.argmax(predicted_labels, dim=1) == torch.argmax(labels, dim=1))
             total_count += len(labels)
     accuracy = correct_count / total_count * 100  # percent
@@ -706,7 +480,10 @@ def torch_train(config):
             optimizer.zero_grad()
 
             predicted_labels = model(features)
-            predicted_labels = torch.squeeze(predicted_labels, dim=-1)
+            if config["num_layers"] > 1:
+                predicted_labels = torch.squeeze(predicted_labels, dim=-1)
+            else:
+                predicted_labels = torch.mean(predicted_labels, dim=2)
             loss = criterion(predicted_labels, labels)
             loss.backward()
             optimizer.step()
@@ -714,8 +491,8 @@ def torch_train(config):
             # update training metrics
             running_loss += loss.item()
 
-        train_accuracy = calculate_accuracy(model, train_loader)
-        val_accuracy = calculate_accuracy(model, val_loader)
+        train_accuracy = calculate_accuracy(model, train_loader, config)
+        val_accuracy = calculate_accuracy(model, val_loader, config)
         improved = False
         if val_accuracy >= best_val_accuracy:
             best_val_accuracy = val_accuracy
@@ -731,7 +508,7 @@ def torch_train(config):
             '; saved' if improved else ''
         ))
 
-    test_accuracy = calculate_accuracy(model, test_loader)
+    test_accuracy = calculate_accuracy(model, test_loader, config)
 
     return model, test_accuracy
 
@@ -804,9 +581,9 @@ if __name__ == "__main__":
         'num_layers': 2,
         'continual': False,
     }
-    non_continual_model, test_accuracy = torch_train(torch_config)
-    flops, params = get_flops_and_params(non_continual_model, torch_config)
-    print(test_accuracy, flops, params)
+    # non_continual_model, test_accuracy = torch_train(torch_config)
+    # flops, params = get_flops_and_params(non_continual_model, torch_config)
+    # print(test_accuracy, flops, params)
 
     torch_config = {
         'batch_size': 32,
