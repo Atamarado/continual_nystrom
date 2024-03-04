@@ -22,6 +22,7 @@ from audioread import NoBackendError
 from preprocess_sound import preprocess_sound
 from gtzan_config import *
 from models import NonCoVisionTransformer, CoVisionTransformer
+from nystromformer import Nystromformer
 
 # ROOT_DIR = '.'
 # os.chdir(ROOT_DIR)
@@ -413,13 +414,15 @@ def calculate_accuracy(model, data_loader, config):
 
 def get_model_path(config):
     return '%s_%d_layers_%s.pth' % (
-        'continual' if config['continual'] else 'non_continual',
+        config['model'],
         config['num_layers'],
         config['version']
     )
 
 
 def torch_train(config):
+    assert config["model"] in ["base", "continual", "nystromformer", "continual_nystrom"]
+
     train_dataset = TorchGTZANDataset('train')
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -443,10 +446,17 @@ def torch_train(config):
     )
 
     # create and load mode
-    if config['continual']:
-        model_class = CoVisionTransformer
-    else:
-        model_class = NonCoVisionTransformer
+    match config["model"]:
+        case "base":
+            model_class = NonCoVisionTransformer
+        case "continual":
+            model_class = CoVisionTransformer
+        case "nystromformer":
+            model_class = Nystromformer
+        case "continual_nystrom":
+            # TODO: Add Continual Nystromformer
+            raise NotImplementedError("Continual Nystrom is not yet available")
+
     model = model_class(
         sequence_len=SEQ_LEN,
         input_dim=INPUT_DIM,
@@ -513,7 +523,7 @@ def torch_train(config):
     return model, test_accuracy
 
 def get_flops_and_params(model, config):
-    if config['continual']:
+    if config['model'] in ["continual", "continual_nystrom"]:  # TODO: Check if the conditions are correct
         warm_up_input = torch.randn(1, INPUT_DIM, SEQ_LEN)
         model.to('cpu')
         assert next(model.parameters()).is_cuda == warm_up_input.is_cuda
@@ -579,7 +589,7 @@ if __name__ == "__main__":
         'epochs': 50,
         'version': 'v5',
         'num_layers': 2,
-        'continual': False,
+        'model': 'base',
     }
     # non_continual_model, test_accuracy = torch_train(torch_config)
     # flops, params = get_flops_and_params(non_continual_model, torch_config)
@@ -593,7 +603,13 @@ if __name__ == "__main__":
         'version': 'v5',
         'num_layers': 1,
         'continual': True,
+        'model': 'continual'
     }
+    # continual_model, test_accuracy = torch_train(torch_config)
+    # flops, params = get_flops_and_params(continual_model, torch_config)
+    # print(test_accuracy, flops, params)
+
+    torch_config["model"] = "nystromformer"
     continual_model, test_accuracy = torch_train(torch_config)
     flops, params = get_flops_and_params(continual_model, torch_config)
     print(test_accuracy, flops, params)
