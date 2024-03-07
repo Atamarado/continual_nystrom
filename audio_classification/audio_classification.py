@@ -402,10 +402,7 @@ def calculate_accuracy(model, data_loader, config):
             features = features.cuda()
             labels = labels.cuda()
             predicted_labels = model(features)
-            if config["num_layers"] > 1:
-                predicted_labels = torch.squeeze(predicted_labels, dim=-1)
-            else:
-                predicted_labels = torch.mean(predicted_labels, dim=2)
+            predicted_labels = torch.squeeze(predicted_labels, dim=-1)
             correct_count += torch.sum(torch.argmax(predicted_labels, dim=1) == torch.argmax(labels, dim=1))
             total_count += len(labels)
     accuracy = correct_count / total_count * 100  # percent
@@ -490,10 +487,7 @@ def torch_train(config):
             optimizer.zero_grad()
 
             predicted_labels = model(features)
-            if config["num_layers"] > 1:
-                predicted_labels = torch.squeeze(predicted_labels, dim=-1)
-            else:
-                predicted_labels = torch.mean(predicted_labels, dim=2)
+            predicted_labels = torch.squeeze(predicted_labels, dim=-1)
             loss = criterion(predicted_labels, labels)
             loss.backward()
             optimizer.step()
@@ -591,9 +585,9 @@ if __name__ == "__main__":
         'num_layers': 2,
         'model': 'base',
     }
-    # non_continual_model, test_accuracy = torch_train(torch_config)
-    # flops, params = get_flops_and_params(non_continual_model, torch_config)
-    # print(test_accuracy, flops, params)
+    non_continual_model, test_accuracy = torch_train(torch_config)
+    flops, params = get_flops_and_params(non_continual_model, torch_config)
+    print(test_accuracy, flops, params)
 
     torch_config = {
         'batch_size': 32,
@@ -605,9 +599,9 @@ if __name__ == "__main__":
         'continual': True,
         'model': 'continual'
     }
-    # continual_model, test_accuracy = torch_train(torch_config)
-    # flops, params = get_flops_and_params(continual_model, torch_config)
-    # print(test_accuracy, flops, params)
+    continual_model, test_accuracy = torch_train(torch_config)
+    flops, params = get_flops_and_params(continual_model, torch_config)
+    print(test_accuracy, flops, params)
 
     torch_config["model"] = "nystromformer"
     continual_model, test_accuracy = torch_train(torch_config)

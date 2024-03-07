@@ -13,14 +13,25 @@ def CoTransformerModel(
     dropout_rate=0.1,
     sequence_len=64,
 ):
-    encoder_layer = co.TransformerEncoderLayerFactory(
-        d_model=embed_dim,
-        nhead=heads,
-        dim_feedforward=mlp_dim,
-        dropout=dropout_rate,
-        activation=nn.GELU(),
-        sequence_len=sequence_len)
-    transformer_encoder = co.TransformerEncoder(encoder_layer, num_layers=depth)
+    if depth == 1:
+        transformer_encoder = co.SingleOutputTransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=heads,
+            dim_feedforward=mlp_dim,
+            dropout=dropout_rate,
+            activation=nn.GELU(),
+            sequence_len=sequence_len,
+            single_output_forward=True
+        )
+    else:
+        encoder_layer = co.TransformerEncoderLayerFactory(
+            d_model=embed_dim,
+            nhead=heads,
+            dim_feedforward=mlp_dim,
+            dropout=dropout_rate,
+            activation=nn.GELU(),
+            sequence_len=sequence_len)
+        transformer_encoder = co.TransformerEncoder(encoder_layer, num_layers=depth)
     return transformer_encoder
 
 
