@@ -52,7 +52,7 @@ def Nystromformer(
 
 class NystromformerEncoder(nn.Module):
 
-    def __init__(self, embed_dim, heads, mlp_dim, dropout_rate, sequence_len, activation=nn.GELU(), layer_norm_eps=1e-5):
+    def __init__(self, embed_dim, heads, mlp_dim, dropout_rate, sequence_len, activation=nn.GELU(), layer_norm_eps=1e-5, single_output_forward=True):
         super().__init__()
 
         self.attention = NystromAttention(
@@ -62,6 +62,8 @@ class NystromformerEncoder(nn.Module):
             seq_len=sequence_len,
             #conv_kernel_size=, TODO: Study it's implementation
         )
+
+        self.delay = co.transformer.SelectOrDelay(delay=0) if single_output_forward else nn.Identity()
 
         self.norm1 = nn.LayerNorm(embed_dim, eps=layer_norm_eps)
 
@@ -83,7 +85,8 @@ class NystromformerEncoder(nn.Module):
         X = self.dropout2(X)
         X = self.norm2(X)
 
-        X = torch.permute(X, (0, 2, 1))
+        X = torch.transpose(X, 2, 1)
+        X = self.delay(X)
         return X
 
 # From https://github.com/mlpen/Nystromformer/blob/56893131bf3fa99b5a2d3ab452a591dca722529a/reorganized_code/encoders/backbones/efficient_attentions/attention_nystrom.py#L6
