@@ -17,6 +17,7 @@ import pickle
 import sys
 from ptflops import get_model_complexity_info # TODO: Check whether to use the version in continual_transformers
 from audioread import NoBackendError
+import random
 
 
 from preprocess_sound import preprocess_sound
@@ -236,7 +237,10 @@ def get_majority_voting_accuracy(model):
             correct_count += 1
     return correct_count / len(labels)
 
-def tf_train(config):
+def tf_train(config, seed=None):
+    if seed:
+        tf.keras.utils.set_random_seed(seed)
+
     tf.keras.backend.clear_session()
 
     test_sequence = TFGTZANSequence('test', config['batch_size'])
@@ -410,37 +414,56 @@ def calculate_accuracy(model, data_loader, config):
 
 
 def get_model_path(config):
-    return '%s_%d_layers_%s.pth' % (
+    return '%s_%d_layers_%s_%s.pth' % (
         config['model'],
         config['num_layers'],
-        config['version']
+        config['version'],
+        config['seed']
     )
 
+def seed_worker(_):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 def torch_train(config):
     assert config["model"] in ["base", "continual", "nystromformer", "continual_nystrom"]
+
+    g = torch.Generator()
+    g.manual_seed(0)
 
     train_dataset = TorchGTZANDataset('train')
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=config['batch_size'],
         shuffle=True,
-        num_workers=config['batch_size']
+        num_workers=config['batch_size'],
+        worker_init_fn=seed_worker,
+        generator=g
     )
     val_dataset = TorchGTZANDataset('val')
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=config['batch_size'],
         shuffle=False,
-        num_workers=config['batch_size']
+        num_workers=config['batch_size'],
+        worker_init_fn=seed_worker,
+        generator=g
     )
     test_dataset = TorchGTZANDataset('test')
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=config['batch_size'],
         shuffle=False,
-        num_workers=config['batch_size']
+        num_workers=config['batch_size'],
+        worker_init_fn=seed_worker,
+        generator=g
     )
+
+    if config['seed']:
+        torch.manual_seed(config['seed'])
+        random.seed(config['seed'])
+        np.random.seed(config['seed'])
 
     # create and load mode
     match config["model"]:
@@ -563,47 +586,50 @@ if __name__ == "__main__":
     with open(params_path, 'wt') as write_file:
         write_file.write(text.replace('496', '96').replace('4.96', '0.96'))
 
-    tf_config = {
-        'batch_size': 64,
-        'epochs': 100,
-        'lr': 1e-4,
-        'retrain': False,
-    }
-    tf_train(tf_config)
+    for seed in range(0, 5):
+        tf_config = {
+            'batch_size': 64,
+            'epochs': 100,
+            'lr': 1e-4,
+            'retrain': False,
+        }
+        tf_train(tf_config, seed=seed)
 
-    head_model = tf.keras.models.load_model(FINE_TUNED_VGGISH_PATH)
-    head_params = get_tf_params(head_model)
-    head_flops = get_tf_flops(head_model)
-    print('Head: params %.2fM; FLOPS %.2fM' % (head_params / 10 ** 6, head_flops / 10 ** 6))
+        head_model = tf.keras.models.load_model(FINE_TUNED_VGGISH_PATH)
+        head_params = get_tf_params(head_model)
+        head_flops = get_tf_flops(head_model)
+        print('Head: params %.2fM; FLOPS %.2fM' % (head_params / 10 ** 6, head_flops / 10 ** 6))
 
-    torch_config = {
-        'batch_size': 32,
-        'lr': 1e-5,
-        'weight_decay': 1e-4,
-        'epochs': 50,
-        'version': 'v5',
-        'num_layers': 2,
-        'model': 'base',
-    }
-    non_continual_model, test_accuracy = torch_train(torch_config)
-    flops, params = get_flops_and_params(non_continual_model, torch_config)
-    print(test_accuracy, flops, params)
+        torch_config = {
+            'batch_size': 32,
+            'lr': 1e-5,
+            'weight_decay': 1e-4,
+            'epochs': 50,
+            'version': 'v5',
+            'num_layers': 2,
+            'model': 'base',
+            'seed': seed
+        }
+        non_continual_model, test_accuracy = torch_train(torch_config)
+        flops, params = get_flops_and_params(non_continual_model, torch_config)
+        print(test_accuracy, flops, params)
 
-    torch_config = {
-        'batch_size': 32,
-        'lr': 1e-5,
-        'weight_decay': 1e-4,
-        'epochs': 50,
-        'version': 'v5',
-        'num_layers': 1,
-        'continual': True,
-        'model': 'continual'
-    }
-    continual_model, test_accuracy = torch_train(torch_config)
-    flops, params = get_flops_and_params(continual_model, torch_config)
-    print(test_accuracy, flops, params)
+        torch_config = {
+            'batch_size': 32,
+            'lr': 1e-5,
+            'weight_decay': 1e-4,
+            'epochs': 50,
+            'version': 'v5',
+            'num_layers': 1,
+            'continual': True,
+            'model': 'continual',
+            'seed': seed
+        }
+        continual_model, test_accuracy = torch_train(torch_config)
+        flops, params = get_flops_and_params(continual_model, torch_config)
+        print(test_accuracy, flops, params)
 
-    torch_config["model"] = "nystromformer"
-    continual_model, test_accuracy = torch_train(torch_config)
-    flops, params = get_flops_and_params(continual_model, torch_config)
-    print(test_accuracy, flops, params)
+        torch_config["model"] = "nystromformer"
+        continual_model, test_accuracy = torch_train(torch_config)
+        flops, params = get_flops_and_params(continual_model, torch_config)
+        print(test_accuracy, flops, params)
