@@ -24,6 +24,7 @@ from preprocess_sound import preprocess_sound
 from gtzan_config import *
 from models import NonCoVisionTransformer, CoVisionTransformer
 from nystromformer import Nystromformer
+from continual_nystromformer import ContinualNystromformer
 
 # ROOT_DIR = '.'
 # os.chdir(ROOT_DIR)
@@ -474,8 +475,7 @@ def torch_train(config):
         case "nystromformer":
             model_class = Nystromformer
         case "continual_nystrom":
-            # TODO: Add Continual Nystromformer
-            raise NotImplementedError("Continual Nystrom is not yet available")
+            model_class = ContinualNystromformer
 
     model = model_class(
         sequence_len=SEQ_LEN,
@@ -586,20 +586,20 @@ if __name__ == "__main__":
     with open(params_path, 'wt') as write_file:
         write_file.write(text.replace('496', '96').replace('4.96', '0.96'))
 
+    tf_config = {
+        'batch_size': 64,
+        'epochs': 100,
+        'lr': 1e-4,
+        'retrain': False,
+    }
+    tf_train(tf_config)
+
+    head_model = tf.keras.models.load_model(FINE_TUNED_VGGISH_PATH)
+    head_params = get_tf_params(head_model)
+    head_flops = get_tf_flops(head_model)
+    print('Head: params %.2fM; FLOPS %.2fM' % (head_params / 10 ** 6, head_flops / 10 ** 6))
+
     for seed in range(0, 5):
-        tf_config = {
-            'batch_size': 64,
-            'epochs': 100,
-            'lr': 1e-4,
-            'retrain': False,
-        }
-        tf_train(tf_config, seed=seed)
-
-        head_model = tf.keras.models.load_model(FINE_TUNED_VGGISH_PATH)
-        head_params = get_tf_params(head_model)
-        head_flops = get_tf_flops(head_model)
-        print('Head: params %.2fM; FLOPS %.2fM' % (head_params / 10 ** 6, head_flops / 10 ** 6))
-
         torch_config = {
             'batch_size': 32,
             'lr': 1e-5,

@@ -4,6 +4,7 @@ import math
 import continual as co
 
 from models import LearnedPositionalEncoding
+from continual_nystromformer import CoNystromAttention
 
 def Nystromformer(
     sequence_len,
@@ -14,6 +15,7 @@ def Nystromformer(
     num_heads,
     num_layers,
     dropout_rate=0.1,
+    continual=False
 ):
     assert embedding_dim % num_heads == 0
 
@@ -34,6 +36,7 @@ def Nystromformer(
             attn_ff_hidden_dim,
             dropout_rate,
             sequence_len,
+            continual=continual
         )
         layers.append(encoder)
 
@@ -52,10 +55,12 @@ def Nystromformer(
 
 class NystromformerEncoder(nn.Module):
 
-    def __init__(self, embed_dim, heads, mlp_dim, dropout_rate, sequence_len, activation=nn.GELU(), layer_norm_eps=1e-5, single_output_forward=True):
+    def __init__(self, embed_dim, heads, mlp_dim, dropout_rate, sequence_len, activation=nn.GELU(), layer_norm_eps=1e-5,
+                 single_output_forward=True, continual=False):
         super().__init__()
+        attention_module = CoNystromAttention if continual else NystromAttention
 
-        self.attention = NystromAttention(
+        self.attention = attention_module(
             embed_dim=embed_dim,
             num_head=heads,
             num_landmarks=10,  # TODO: Specify number of landmarks
