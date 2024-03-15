@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import math
 import continual as co
+from continual import RecyclingPositionalEncoding
 
 from models import LearnedPositionalEncoding
 from continual_nystromformer import CoNystromAttention
@@ -20,11 +21,19 @@ def Nystromformer(
     assert embedding_dim % num_heads == 0
 
     linear_encoding = co.Linear(input_dim, embedding_dim, channel_dim=1)
-    position_encoding = LearnedPositionalEncoding(
-        embedding_dim,
-        embedding_dim,
-        sequence_len
-    )
+
+    if continual:
+        position_encoding = RecyclingPositionalEncoding(
+            embedding_dim,
+            int(embedding_dim * 1.0),  # Change num pos enc to cycle between
+            forward_update_index_steps=1,
+        )
+    else:
+        position_encoding = LearnedPositionalEncoding(
+            embedding_dim,
+            embedding_dim,
+            sequence_len
+        )
 
     pe_dropout = nn.Dropout(p=dropout_rate)
 
@@ -126,8 +135,8 @@ class NystromAttention(nn.Module):
 
         for i in range(self.num_head):
             Q_head[i] = self.q_linear[i](Q)
-            K_head[i] = self.q_linear[i](K)
-            V_head[i] = self.q_linear[i](V)
+            K_head[i] = self.k_linear[i](K)
+            V_head[i] = self.v_linear[i](V)
 
         Q = torch.permute(Q_head, (1, 0, 2, 3))
         K = torch.permute(K_head, (1, 0, 2, 3))
@@ -172,3 +181,25 @@ class NystromAttention(nn.Module):
 
     def extra_repr(self):
         return f'num_landmarks={self.num_landmarks}, seq_len={self.seq_len}'
+
+def ContinualNystromformer(
+    sequence_len,
+    input_dim,
+    embedding_dim,
+    attn_ff_hidden_dim,
+    out_dim,
+    num_heads,
+    num_layers,
+    dropout_rate=0.1
+):
+    return Nystromformer(
+        sequence_len,
+        input_dim,
+        embedding_dim,
+        attn_ff_hidden_dim,
+        out_dim,
+        num_heads,
+        num_layers,
+        dropout_rate=dropout_rate,
+        continual=True
+    )

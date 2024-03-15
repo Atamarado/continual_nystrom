@@ -3,32 +3,9 @@ import torch
 import math
 
 from utils import continual_matrix_concat
-from nystromformer import Nystromformer
-
-def ContinualNystromformer(
-    sequence_len,
-    input_dim,
-    embedding_dim,
-    attn_ff_hidden_dim,
-    out_dim,
-    num_heads,
-    num_layers,
-    dropout_rate=0.1
-):
-    return Nystromformer(
-        sequence_len,
-        input_dim,
-        embedding_dim,
-        attn_ff_hidden_dim,
-        out_dim,
-        num_heads,
-        num_layers,
-        dropout_rate=dropout_rate,
-        continual=True
-    )
 
 class CoNystromAttention(nn.Module):
-    def __init__(self, embed_dim, num_head, num_landmarks, seq_len, conv_kernel_size=None):
+    def __init__(self, embed_dim, num_head, num_landmarks, seq_len, window_size=60, conv_kernel_size=None):
         super().__init__()
 
         self.embed_dim = embed_dim
@@ -37,8 +14,9 @@ class CoNystromAttention(nn.Module):
 
         self.num_landmarks = num_landmarks
         self.seq_len = seq_len
+        self.window_size = window_size
 
-        self.tokens_per_landmark = self.seq_len // self.num_landmarks == self.seq_len
+        self.tokens_per_landmark = self.window_size // self.num_landmarks
 
         self.use_conv = conv_kernel_size
         if self.use_conv:
@@ -62,8 +40,8 @@ class CoNystromAttention(nn.Module):
 
         for i in range(self.num_head):
             Q_head[i] = self.q_linear[i](Q)
-            K_head[i] = self.q_linear[i](K)
-            V_head[i] = self.q_linear[i](V)
+            K_head[i] = self.k_linear[i](K)
+            V_head[i] = self.v_linear[i](V)
 
         Q = torch.permute(Q_head, (1, 0, 2, 3))
         K = torch.permute(K_head, (1, 0, 2, 3))
@@ -73,19 +51,23 @@ class CoNystromAttention(nn.Module):
 
     # Generic qk_product
     def qk_product(self, q, k,):
-        return torch.exp(torch.matmul(q, torch.transpose(k, 2, 3)) / self.d_q)
+        return torch.exp(torch.matmul(q, torch.transpose(k, 2, 3)))# / self.d_q)
 
     def forward_QKV(self, Q, K, V):
+        device = Q.device
         Q, K, V = self.multi_head(Q, K, V)
+
+        Q = Q / math.sqrt(math.sqrt(self.head_dim))
+        K = K / math.sqrt(math.sqrt(self.head_dim))
 
         # Q|K|V shape = (batch_size, num_head, num_tokens, head_size)
 
         # Local variables used to match with formulation
         m = self.num_landmarks
-        n = self.seq_len
+        n = self.window_size
 
         # seq_len has to be bigger than the number of tokens
-        if Q.size(dim=2) < self.seq_len:
+        if Q.size(dim=2) < self.window_size:
             # TODO: Add solution
             return
 
@@ -93,81 +75,102 @@ class CoNystromAttention(nn.Module):
         # Expansion phase (first self.seq_len tokens)
 
         # Select first set of landmarks
-        Q_first = Q[:, :, :self.seq_len]
-        K_first = K[:, :, :self.seq_len]
-        V_first = V[:, :, :self.seq_len]
+        Q_first = Q[:, :, :self.window_size]
+        K_first = K[:, :, :self.window_size]
+        V_first = V[:, :, :self.window_size]
 
-        self.Q_tilde = Q_first.reshape(-1, self.num_head, self.seq_len // self.num_landmarks, self.head_dim).mean(dim=-2)
-        self.K_tilde = K_first.reshape(-1, self.num_head, self.seq_len // self.num_landmarks, self.head_dim).mean(dim=-2)
+        Q_tilde = Q_first.reshape(-1, self.num_head, self.num_landmarks, self.window_size // self.num_landmarks, self.head_dim).mean(dim=-2)
+        K_tilde = K_first.reshape(-1, self.num_head, self.num_landmarks, self.window_size // self.num_landmarks, self.head_dim).mean(dim=-2)
 
-        self.Beta_mem = self.qk_product(Q_first, self.K_tilde)  # Note that the first row will be old at the next iteration
-        self.Gamma_mem = self.qk_product(self.Q_tilde, self.K_tilde)
-        self.Delta_mem = self.qk_product(self.Q_tilde, self.K_tilde)
+        Beta_mem = self.qk_product(Q_first, K_tilde)  # Note that the first row will be old at the next iteration
+        Gamma_mem = self.qk_product(Q_tilde, K_tilde)
+        Delta_mem = self.qk_product(Q_tilde, K_first)
 
         # The first set of diagonals are computed in the same way as in the original paper
-        self.d_Beta_mem = torch.matmul(self.Beta_mem, torch.ones((m, 1)))
-        self.d_Gamma_mem = torch.matmul(self.Gamma_mem, torch.ones((m, 1)))
-        self.d_Delta_mem = torch.matmul(self.Delta_mem, torch.ones((n, 1)))
+        d_Beta_mem = torch.matmul(Beta_mem, torch.ones((m, 1), device=device))
+        d_Gamma_mem = torch.matmul(Gamma_mem, torch.ones((m, 1), device=device))
+        d_Delta_mem = torch.matmul(Delta_mem, torch.ones((n, 1), device=device))
 
-        self.Beta_D_mem = self.Beta_mem / self.d_Beta_mem
-        self.Gamma_D_mem = iterative_inv(self.Gamma_mem / self.d_Gamma_mem)  # TODO: Improved formulation coming
-        self.Delta_D_mem = self.Delta_mem / self.d_Delta_mem
+        Beta_D_mem = Beta_mem / d_Beta_mem
+        Gamma_D_mem = Gamma_mem / d_Gamma_mem
+        Gamma_D_mem = iterative_inv(Gamma_D_mem)  # TODO: Improved formulation coming
+        Delta_D_mem = Delta_mem / d_Delta_mem
 
-        self.Beta_Gamma_mem = torch.matmul(self.Beta_D_mem, self.Gamma_D_mem)
-        self.Delta_V = torch.matmul(self.Delta_D_mem, V_first)
+        Beta_Gamma_mem = torch.matmul(Beta_D_mem, Gamma_D_mem)
+        Delta_V = torch.matmul(Delta_D_mem, V_first)
 
-        attention = [torch.matmul(self.Beta_Gamma, self.Delta_V)]
+        attention_first = torch.matmul(Beta_Gamma_mem, Delta_V)
+        attention = []
 
+        # res = torch.cat((attention_first, Q[:, :, self.window_size:]), dim=2)
+        # res = torch.flatten(torch.permute(res, (0, 2, 1, 3)), 2, 3)
+        # return res
         # --------------------------------------------------------------------------------------------------------------
         # Continual phase: from seq_len to the end of the input
-        for i in range(self.seq_len, Q.size(dim=2)):
-            q_new = Q[:, :, i]
-            k_new = K[:, :, i]  # TODO: Can we transpose all K directly?
+        for i in range(self.window_size, Q.size(dim=2)):
+            q_new = Q[:, :, i].unsqueeze(-2)
+            k_new = K[:, :, i].unsqueeze(-2)  # TODO: Can we transpose all K directly?
 
             if i % self.tokens_per_landmark == self.tokens_per_landmark - 1:
+            #if False: # TODO: Nan problem only arises when either of these two parts is used, but not at the beginning
                 # ------------------------------------------------------------------------------------------------------
                 # We need to update the landmarks
                 # New landmarks
-                q_tilde_new = Q[:, :, i-self.seq_len:i].mean(dim=-2)
-                k_tilde_new = K[:, :, i-self.seq_len:i].mean(dim=-2)
+                q_tilde_new = Q[:, :, i-self.window_size:i].mean(dim=-2).unsqueeze(-2)
+                k_tilde_new = K[:, :, i-self.window_size:i].mean(dim=-2).unsqueeze(-2)
 
-                q_tilde_old = Q[:, :, 0]
-                k_tilde_old = K[:, :, 0]
+                k_old = Q[:, :, i-self.window_size].unsqueeze(-2)
+                k_tilde_old = K_tilde[:, :, 0].unsqueeze(-2)
 
-                Q_mem = Q[:, :, i-self.seq_len+1: i]
-                K_mem = K[:, :, i-self.seq_len+1: i]
+                Q_mem = Q[:, :, i-self.window_size+1: i]
+                K_mem = K[:, :, i-self.window_size+1: i]
 
-                Q_tilde_mem = self.Q_tilde[:, :, 1]
-                K_tilde_mem = self.K_tilde[:, :, 1]
+                Q_tilde_mem = Q_tilde[:, :, 1:]
+                K_tilde_mem = K_tilde[:, :, 1:]
+
+                # Update Q, K_tilde
+                Q_tilde = torch.cat((
+                    Q_tilde_mem,
+                    q_tilde_new
+                    ),
+                    dim=2
+                )
+
+                K_tilde = torch.cat((
+                    K_tilde_mem,
+                    k_tilde_new
+                    ),
+                    dim=2
+                )
 
                 # Beta update
                 Beta_B = self.qk_product(Q_mem, k_tilde_new)
                 Beta_C = self.qk_product(q_new, K_tilde_mem)
-                Beta_D = self.qk_product(q_new, k_tilde_new).squeeze()
-                self.Beta_mem = continual_matrix_concat(self.Beta_mem, Beta_B, Beta_C, Beta_D)
+                Beta_D = self.qk_product(q_new, k_tilde_new)
+                Beta_mem = continual_matrix_concat(Beta_mem, Beta_B, Beta_C, Beta_D)
 
                 # Gamma update
                 Gamma_B = self.qk_product(Q_tilde_mem, k_tilde_new)
                 Gamma_C = self.qk_product(q_tilde_new, K_tilde_mem)
-                Gamma_D = self.qk_product(q_tilde_new, k_tilde_new).squeeze()
-                self.Gamma_mem = continual_matrix_concat(self.Gamma_mem, Gamma_B, Gamma_C, Gamma_D)
+                Gamma_D = self.qk_product(q_tilde_new, k_tilde_new)
+                Gamma_mem = continual_matrix_concat(Gamma_mem, Gamma_B, Gamma_C, Gamma_D)
 
                 # Delta update
                 Delta_B = self.qk_product(Q_tilde_mem, k_new)
                 Delta_C = self.qk_product(q_tilde_new, K_mem)
-                Delta_D = self.qk_product(q_tilde_new, k_new).squeeze()
-                self.Delta_mem = continual_matrix_concat(self.Delta_mem, Delta_B, Delta_C, Delta_D)
+                Delta_D = self.qk_product(q_tilde_new, k_new)
+                Delta_mem = continual_matrix_concat(Delta_mem, Delta_B, Delta_C, Delta_D)
 
                 # d_Beta update
-                d_Beta_mem = self.d_Beta_mem[:, :, 1:] - self.qk_product(Q_mem, k_tilde_old) + self.qk_product(Q_mem, k_tilde_new)
+                d_Beta_mem = d_Beta_mem[:, :, 1:] - self.qk_product(Q_mem, k_tilde_old) + self.qk_product(Q_mem, k_tilde_new)
                 d_Beta_new = torch.cat((
                     self.qk_product(q_new, K_tilde_mem),
-                    self.qk_product(q_new, k_tilde_new).squeeze()
+                    self.qk_product(q_new, k_tilde_new)
                     ),
-                    dim=2
+                    dim=3
                 )
-                d_Beta_new = torch.matmul(d_Beta_new, torch.ones((m, 1)))
-                self.d_Beta_mem = torch.cat((
+                d_Beta_new = torch.matmul(d_Beta_new, torch.ones((m, 1), device=device))
+                d_Beta_mem = torch.cat((
                     d_Beta_mem,
                     d_Beta_new
                     ),
@@ -175,15 +178,15 @@ class CoNystromAttention(nn.Module):
                 )
 
                 # Next: d_Gamma update
-                d_Gamma_mem = self.d_Gamma_mem[:, :, 1:] - self.qk_product(Q_tilde_mem, k_tilde_old) + self.qk_product(Q_tilde_mem, k_tilde_new)
+                d_Gamma_mem = d_Gamma_mem[:, :, 1:] - self.qk_product(Q_tilde_mem, k_tilde_old) + self.qk_product(Q_tilde_mem, k_tilde_new)
                 d_Gamma_new = torch.cat((
                     self.qk_product(q_tilde_new, K_tilde_mem),
-                    self.qk_product(q_tilde_new, k_tilde_new).squeeze()
+                    self.qk_product(q_tilde_new, k_tilde_new)
                     ),
-                    dim=2
+                    dim=3
                 )
-                d_Gamma_new = torch.matmul(d_Gamma_new, torch.ones((m, 1)))
-                self.d_Gamma_mem = torch.cat((
+                d_Gamma_new = torch.matmul(d_Gamma_new, torch.ones((m, 1), device=device))
+                d_Gamma_mem = torch.cat((
                     d_Gamma_mem,
                     d_Gamma_new
                     ),
@@ -191,15 +194,15 @@ class CoNystromAttention(nn.Module):
                 )
 
                 # Next: d_Delta update
-                d_Delta_mem = self.d_Delta_mem[:, :, 1:] - self.qk_product(Q_tilde_mem, k_old) + self.qk_product(Q_tilde_mem, k_new)
+                d_Delta_mem = d_Delta_mem[:, :, 1:] - self.qk_product(Q_tilde_mem, k_old) + self.qk_product(Q_tilde_mem, k_new)
                 d_Delta_new = torch.cat((
                     self.qk_product(q_tilde_new, K_mem),
-                    self.qk_product(q_tilde_new, k_tilde_new).squeeze()
+                    self.qk_product(q_tilde_new, k_tilde_new)
                     ),
-                    dim=2
+                    dim=3
                 )
-                d_Delta_new = torch.matmul(d_Delta_new, torch.ones((n, 1)))
-                self.d_Delta_mem = torch.cat((
+                d_Delta_new = torch.matmul(d_Delta_new, torch.ones((n, 1), device=device))
+                d_Delta_mem = torch.cat((
                     d_Delta_mem,
                     d_Delta_new
                     ),
@@ -207,72 +210,81 @@ class CoNystromAttention(nn.Module):
                 )
 
                 # Vector-matrix multipliations
-                self.Beta_D_mem = self.Beta_mem / self.d_Beta_mem
-                self.Gamma_D_new = iterative_inv(self.Gamma_mem / self.d_Gamma_mem)
-                self.Delta_D_mem = self.Delta_mem / self.d_Delta_mem
+                Beta_D_mem = Beta_mem / d_Beta_mem
+                Gamma_D_mem = iterative_inv(Gamma_mem / d_Gamma_mem)
+                Delta_D_mem = Delta_mem / d_Delta_mem
 
                 # Matrix multiplications
-                self.Beta_Gamma_mem = torch.matmul(self.Beta_D_mem, self.Gamma_D_mem)
+                Beta_Gamma_mem = torch.matmul(Beta_D_mem, Gamma_D_mem)
             else:
                 # ------------------------------------------------------------------------------------------------------
                 # Fixed landmarks
                 # Beta^D * Gamma^D computation
-                Beta_new = self.qk_product(q_new, self.K_tilde)
-                d_Beta_new = torch.matmul(Beta_new, torch.ones((m, 1))).squeeze()
+                Beta_new = self.qk_product(q_new, K_tilde)
+                d_Beta_new = torch.matmul(Beta_new, torch.ones((m, 1), device=device))
                 Beta_D_new = Beta_new/d_Beta_new
 
-                self.Beta_Gamma_mem = torch.cat((
-                    self.Beta_Gamma_mem[:, :, 1:],
-                    torch.matmul(Beta_D_new, self.Gamma_D_mem)
+                Beta_Gamma_mem = torch.cat((
+                    Beta_Gamma_mem[:, :, 1:],
+                    torch.matmul(Beta_D_new, Gamma_D_mem)
                     ),
                     dim=2
                 )
 
                 # Update Beta_mem and d_Beta_mem
-                self.Beta_nem = torch.cat((
-                    self.Beta_mem[:, :, 1:],
+                Beta_mem = torch.cat((
+                    Beta_mem[:, :, 1:],
                     Beta_new
                     ),
                     dim=2
                 )
 
-                self.d_Beta_mem = torch.cat((
-                    self.d_Beta_mem[:, :, 1:],
+                d_Beta_mem = torch.cat((
+                    d_Beta_mem[:, :, 1:],
                     d_Beta_new
                     ),
                     dim=2
                 )
 
-
                 # Delta computation
-                Delta_new = self.qk_product(self.Q_tilde, k_new)
-                self.Delta_mem = torch.cat((
-                    self.Delta_mem[:, :, :, 1:],
+                Delta_new = self.qk_product(Q_tilde, k_new)
+                Delta_mem = torch.cat((
+                    Delta_mem[:, :, :, 1:],
                     Delta_new
                     ),
                     dim=3
                 )
 
                 # self.d_Delta_mem
-                k_old = K[:, :, i-self.seq_len]
-                d_Delta_old = self.qk_product(self.Q_tilde, k_old)  # TODO: We can cache this operation
-                d_Delta_new = Delta_new  # Same value
+                k_old = K[:, :, i-self.window_size].unsqueeze(-2)
+                d_Delta_old = self.qk_product(Q_tilde, k_old)  # TODO: We can cache this operation when k_old is k_new
+                d_Delta_new = Delta_new  # Same value self.qk_product(Q_tilde, k_new)
 
-                self.d_Delta_mem = self.d_Delta_mem - d_Delta_old + d_Delta_new
+                d_Delta_mem = d_Delta_mem - d_Delta_old + d_Delta_new
 
                 # Delta^D odot
-                self.Delta_D_mem = self.Delta_mem/self.d_Delta_mem
+                Delta_D_mem = Delta_mem/d_Delta_mem
 
             # ----------------------------------------------------------------------------------------------------------
             # Finish last computations
 
             # Delta^D * V multiplication
-            self.Delta_V = torch.matmul(self.Delta_D_mem, V[:, :, i-self.seq_len+1:i+1])
+            Delta_V = torch.matmul(Delta_D_mem, V[:, :, i-self.window_size+1:i+1])
+            res = torch.matmul(Beta_Gamma_mem, Delta_V)[:, :, 0]
 
-            # Append new attention
-            attention.append(torch.matmul(self.Beta_Gamma_mem, self.Delta_V))
+            # Append new attention token
+            attention.append(res.unsqueeze(0))
 
-        return torch.cat(attention).to(attention[0].device)
+        # Merge and fix shapes
+        attention = torch.cat(attention).to(attention[0].device)
+
+        attention = torch.permute(attention, (1, 0, 2, 3))
+        attention_first = torch.permute(attention_first, (0, 2, 1, 3))
+
+        attention = torch.cat((attention_first, attention), dim=1)
+        attention = torch.flatten(attention, 2, 3)
+
+        return attention
 
 
     def forward(self, X, swap_axes=True):

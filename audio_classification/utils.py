@@ -6,7 +6,7 @@ import torch
 def continual_matrix_concat(A, b, c, d):
     return torch.cat((
         torch.cat((
-            A[:, :, 1: 1:],
+            A[:, :, 1:, 1:],
             b
             ),
             dim=3

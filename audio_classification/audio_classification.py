@@ -23,8 +23,7 @@ import random
 from preprocess_sound import preprocess_sound
 from gtzan_config import *
 from models import NonCoVisionTransformer, CoVisionTransformer
-from nystromformer import Nystromformer
-from continual_nystromformer import ContinualNystromformer
+from nystromformer import Nystromformer, ContinualNystromformer
 
 # ROOT_DIR = '.'
 # os.chdir(ROOT_DIR)
@@ -397,7 +396,7 @@ class TorchGTZANDataset(torch.utils.data.Dataset):
 INPUT_DIM = 128
 SEQ_LEN = 120
 
-def calculate_accuracy(model, data_loader, config):
+def calculate_accuracy(model, data_loader):
     correct_count = 0
     total_count = 0
     with torch.no_grad():
@@ -430,6 +429,11 @@ def seed_worker(_):
 def torch_train(config):
     assert config["model"] in ["base", "continual", "nystromformer", "continual_nystrom"]
 
+    if config['seed']:
+        torch.manual_seed(config['seed'])
+        random.seed(config['seed'])
+        np.random.seed(config['seed'])
+
     g = torch.Generator()
     g.manual_seed(0)
 
@@ -461,11 +465,6 @@ def torch_train(config):
         generator=g
     )
 
-    if config['seed']:
-        torch.manual_seed(config['seed'])
-        random.seed(config['seed'])
-        np.random.seed(config['seed'])
-
     # create and load mode
     match config["model"]:
         case "base":
@@ -493,7 +492,7 @@ def torch_train(config):
 
     # optimizer and loss
     optimizer = optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss()  # CrossEntropyLoss includes the softmax
 
     # training loop
     best_val_accuracy = 0.0
@@ -518,8 +517,8 @@ def torch_train(config):
             # update training metrics
             running_loss += loss.item()
 
-        train_accuracy = calculate_accuracy(model, train_loader, config)
-        val_accuracy = calculate_accuracy(model, val_loader, config)
+        train_accuracy = calculate_accuracy(model, train_loader)
+        val_accuracy = calculate_accuracy(model, val_loader)
         improved = False
         if val_accuracy >= best_val_accuracy:
             best_val_accuracy = val_accuracy
@@ -629,7 +628,7 @@ if __name__ == "__main__":
         flops, params = get_flops_and_params(continual_model, torch_config)
         print(test_accuracy, flops, params)
 
-        torch_config["model"] = "nystromformer"
+        torch_config["model"] = "continual_nystrom"
         continual_model, test_accuracy = torch_train(torch_config)
         flops, params = get_flops_and_params(continual_model, torch_config)
         print(test_accuracy, flops, params)
