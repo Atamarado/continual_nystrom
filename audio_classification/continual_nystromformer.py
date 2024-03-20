@@ -119,7 +119,7 @@ class CoNystromAttention(nn.Module):
                 q_tilde_new = Q[:, :, i-self.window_size:i].mean(dim=-2).unsqueeze(-2)
                 k_tilde_new = K[:, :, i-self.window_size:i].mean(dim=-2).unsqueeze(-2)
 
-                k_old = Q[:, :, i-self.window_size].unsqueeze(-2)
+                k_old = K[:, :, i-self.window_size].unsqueeze(-2)
                 k_tilde_old = K_tilde[:, :, 0].unsqueeze(-2)
 
                 Q_mem = Q[:, :, i-self.window_size+1: i]

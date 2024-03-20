@@ -512,7 +512,6 @@ def torch_train(config):
             optimizer.zero_grad()
 
             predicted_labels = model(features)
-            # TODO: Check make_dot
             predicted_labels = torch.squeeze(predicted_labels, dim=-1)
             loss = criterion(predicted_labels, labels)
             if torch.isnan(loss):
