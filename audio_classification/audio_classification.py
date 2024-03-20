@@ -80,9 +80,9 @@ def VGGish(load_weights=True, weights='audioset',
     if load_weights:
         if weights == 'audioset':
             if include_top:
-                model.load_weights('vggish_audioset_weights.h5')
+                model.load_weights(VGGISH_FOLDER+'/vggish_audioset_weights.h5')
             else:
-                model.load_weights('vggish_audioset_weights_without_fc2.h5')
+                model.load_weights(VGGISH_FOLDER+'/vggish_audioset_weights_without_fc2.h5')
         else:
             print("failed to load weights")
 
@@ -412,9 +412,10 @@ def calculate_accuracy(model, data_loader):
     accuracy = correct_count / total_count * 100  # percent
     return accuracy
 
-
+MODEL_FOLDER = "saved_models"
 def get_model_path(config):
-    return '%s_%d_layers_%s_%s.pth' % (
+    return '%s/%s_%d_layers_%s_%s.pth' % (
+        MODEL_FOLDER,
         config['model'],
         config['num_layers'],
         config['version'],
@@ -494,6 +495,8 @@ def torch_train(config):
     optimizer = optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
     criterion = nn.CrossEntropyLoss()  # CrossEntropyLoss includes the softmax
 
+    os.makedirs(MODEL_FOLDER, exist_ok=True)
+
     # training loop
     best_val_accuracy = 0.0
     for epoch in range(config['epochs']):
@@ -509,8 +512,11 @@ def torch_train(config):
             optimizer.zero_grad()
 
             predicted_labels = model(features)
+            # TODO: Check make_dot
             predicted_labels = torch.squeeze(predicted_labels, dim=-1)
             loss = criterion(predicted_labels, labels)
+            if torch.isnan(loss):
+                pass
             loss.backward()
             optimizer.step()
 
@@ -534,7 +540,9 @@ def torch_train(config):
             '; saved' if improved else ''
         ))
 
-    test_accuracy = calculate_accuracy(model, test_loader, config)
+    # Reload best model for test
+    model.load_state_dict(torch.load(get_model_path(config)))
+    test_accuracy = calculate_accuracy(model, test_loader)
 
     return model, test_accuracy
 
@@ -555,15 +563,18 @@ def get_flops_and_params(model, config):
     return flops, params
 
 if __name__ == "__main__":
+    os.makedirs(VGGISH_FOLDER, exist_ok=True)
+    os.makedirs(GTZAN_CACHE_FOLDER, exist_ok=True)
+
     # Download weights
     download_list = [
         (
             'https://drive.google.com/u/0/uc?id=1mhqXZ8CANgHyepum7N4yrjiyIg6qaMe6',
-            'vggish_audioset_weights.h5'
+            VGGISH_FOLDER+'/vggish_audioset_weights.h5'
         ),
         (
             'https://drive.google.com/u/0/uc?id=16JrWEedwaZFVZYvn1woPKCuWx85Ghzkp',
-            'vggish_audioset_weights_without_fc2.h5'
+            VGGISH_FOLDER+'/vggish_audioset_weights_without_fc2.h5'
         )
     ]
     for url, file_path in download_list:
@@ -609,9 +620,9 @@ if __name__ == "__main__":
             'model': 'base',
             'seed': seed
         }
-        non_continual_model, test_accuracy = torch_train(torch_config)
-        flops, params = get_flops_and_params(non_continual_model, torch_config)
-        print(test_accuracy, flops, params)
+        # non_continual_model, test_accuracy = torch_train(torch_config)
+        # flops, params = get_flops_and_params(non_continual_model, torch_config)
+        # print(test_accuracy, flops, params)
 
         torch_config = {
             'batch_size': 32,
@@ -624,9 +635,9 @@ if __name__ == "__main__":
             'model': 'continual',
             'seed': seed
         }
-        continual_model, test_accuracy = torch_train(torch_config)
-        flops, params = get_flops_and_params(continual_model, torch_config)
-        print(test_accuracy, flops, params)
+        # continual_model, test_accuracy = torch_train(torch_config)
+        # flops, params = get_flops_and_params(continual_model, torch_config)
+        # print(test_accuracy, flops, params)
 
         torch_config["model"] = "continual_nystrom"
         continual_model, test_accuracy = torch_train(torch_config)
