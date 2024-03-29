@@ -28,7 +28,8 @@ from nystromformer import Nystromformer, ContinualNystromformer
 # ROOT_DIR = '.'
 # os.chdir(ROOT_DIR)
 
-SELECTED_GPUS = [7] # TODO: Does this work as intended?
+# Select a single GPU to perform the training
+SELECTED_GPUS = [0]
 os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(gpu_number) for gpu_number in SELECTED_GPUS])
 
 # Configure  GPUS
@@ -428,7 +429,7 @@ def seed_worker(_):
     random.seed(worker_seed)
 
 def torch_train(config):
-    assert config["model"] in ["base", "continual", "nystromformer", "continual_nystrom"]
+    assert config["model"] in ["base", "base_continual", "nystromformer", "continual_nystrom"]
 
     if config['seed']:
         torch.manual_seed(config['seed'])
@@ -470,7 +471,7 @@ def torch_train(config):
     match config["model"]:
         case "base":
             model_class = NonCoVisionTransformer
-        case "continual":
+        case "base_continual":
             model_class = CoVisionTransformer
         case "nystromformer":
             model_class = Nystromformer
@@ -511,6 +512,7 @@ def torch_train(config):
             # train the model
             optimizer.zero_grad()
 
+            #with torch.autograd.detect_anomaly(check_nan=True):
             predicted_labels = model(features)
             predicted_labels = torch.squeeze(predicted_labels, dim=-1)
             loss = criterion(predicted_labels, labels)
@@ -543,10 +545,10 @@ def torch_train(config):
     model.load_state_dict(torch.load(get_model_path(config)))
     test_accuracy = calculate_accuracy(model, test_loader)
 
-    return model, test_accuracy
+    return model, best_val_accuracy, test_accuracy
 
 def get_flops_and_params(model, config):
-    if config['model'] in ["continual", "continual_nystrom"]:  # TODO: Check if the conditions are correct
+    if config['model'] in ["base_continual", "continual_nystrom"]:
         warm_up_input = torch.randn(1, INPUT_DIM, SEQ_LEN)
         model.to('cpu')
         assert next(model.parameters()).is_cuda == warm_up_input.is_cuda
@@ -560,6 +562,54 @@ def get_flops_and_params(model, config):
             model, (INPUT_DIM, SEQ_LEN), as_strings=False, print_per_layer_stat=False
         )
     return flops, params
+
+def std(lst):
+    mean = sum(lst) / len(lst)
+    variance = sum([((x - mean) ** 2) for x in lst]) / len(lst)
+    return variance ** 0.5
+
+def evaluate_config(config, num_seeds=5):
+
+    val_accuracies = []
+    test_accuracies = []
+    flops_list = []
+    params_list = []
+    for seed in range(num_seeds):
+        config["seed"] = seed
+        print(config["model"], "model with "+str(config["num_layers"])+". Seed: "+str(config["seed"]))
+        model, val_accuracy, test_accuracy = torch_train(config)
+        flops, params = get_flops_and_params(model, config)
+        print(test_accuracy, flops, params)
+
+        val_accuracies.append(val_accuracy)
+        test_accuracies.append(test_accuracy)
+        flops_list.append(flops)
+        params_list.append(params)
+
+    print("---------------------")
+    print(config["model"], "model with " + str(config["num_layers"]) + " layers")
+    print("Mean:")
+    print("\tval_acc:", str(sum(val_accuracies)/len(val_accuracies)))
+    print("\ttest_acc:", str(sum(test_accuracies)/len(test_accuracies)))
+    print("\tflops:", str(sum(flops_list)/len(flops_list)))
+    print("\tparams:", str(sum(params_list)/len(params_list)))
+    print()
+
+    print("Std:")
+    print("\tval_acc:", str(std(val_accuracies)))
+    print("\ttest_acc:", str(std(test_accuracies)))
+    print("\tflops:", str(std(flops_list)))
+    print("\tparams:", str(std(params_list)))
+
+    print("---------------------")
+
+    print("Individual values:")
+    for seed in range(len(val_accuracies)):
+        print("Seed", str(seed))
+        print("\t", str(val_accuracies[seed]), str(test_accuracies[seed]), str(flops_list[seed]), str(params_list[seed]))
+
+    print("End of evaluation ---------------------------------")
+
 
 if __name__ == "__main__":
     os.makedirs(VGGISH_FOLDER, exist_ok=True)
@@ -608,37 +658,42 @@ if __name__ == "__main__":
     head_flops = get_tf_flops(head_model)
     print('Head: params %.2fM; FLOPS %.2fM' % (head_params / 10 ** 6, head_flops / 10 ** 6))
 
-    for seed in range(0, 5):
-        torch_config = {
-            'batch_size': 32,
-            'lr': 1e-5,
-            'weight_decay': 1e-4,
-            'epochs': 50,
-            'version': 'v5',
-            'num_layers': 2,
-            'model': 'base',
-            'seed': seed
-        }
-        # non_continual_model, test_accuracy = torch_train(torch_config)
-        # flops, params = get_flops_and_params(non_continual_model, torch_config)
-        # print(test_accuracy, flops, params)
+    torch_config = {
+        'batch_size': 32,
+        'lr': 1e-5,
+        'weight_decay': 1e-4,
+        'epochs': 50,
+        'version': 'v5',
+        'num_layers': 1,
+        'model': 'base'
+    }
+    evaluate_config(torch_config)
 
-        torch_config = {
-            'batch_size': 32,
-            'lr': 1e-5,
-            'weight_decay': 1e-4,
-            'epochs': 50,
-            'version': 'v5',
-            'num_layers': 1,
-            'continual': True,
-            'model': 'continual',
-            'seed': seed
-        }
+    torch_config["num_layers"] = 2
+    evaluate_config(torch_config)
+
+    torch_config["num_layers"] = 1
+    torch_config["model"] = "base_continual"
+    evaluate_config(torch_config)
+
+    torch_config["num_layers"] = 2
+    evaluate_config(torch_config)
+
+        # torch_config = {
+        #     'batch_size': 32,
+        #     'lr': 1e-5,
+        #     'weight_decay': 1e-4,
+        #     'epochs': 50,
+        #     'version': 'v5',
+        #     'num_layers': 1,
+        #     'model': 'continual',
+        #     'seed': seed
+        # }
         # continual_model, test_accuracy = torch_train(torch_config)
         # flops, params = get_flops_and_params(continual_model, torch_config)
         # print(test_accuracy, flops, params)
 
-        torch_config["model"] = "continual_nystrom"
-        continual_model, test_accuracy = torch_train(torch_config)
-        flops, params = get_flops_and_params(continual_model, torch_config)
-        print(test_accuracy, flops, params)
+        # torch_config["model"] = "continual_nystrom"
+        # continual_model, test_accuracy = torch_train(torch_config)
+        # flops, params = get_flops_and_params(continual_model, torch_config)
+        # print(test_accuracy, flops, params)
