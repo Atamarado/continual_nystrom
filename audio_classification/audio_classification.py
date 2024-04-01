@@ -1,3 +1,6 @@
+# Tensorboard must be imported before
+from torch.utils.tensorboard import SummaryWriter
+
 import tensorflow as tf
 from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2_as_graph
 
@@ -444,7 +447,7 @@ def torch_train(config):
         train_dataset,
         batch_size=config['batch_size'],
         shuffle=True,
-        num_workers=config['batch_size'],
+        #num_workers=config['batch_size'],
         worker_init_fn=seed_worker,
         generator=g
     )
@@ -453,7 +456,7 @@ def torch_train(config):
         val_dataset,
         batch_size=config['batch_size'],
         shuffle=False,
-        num_workers=config['batch_size'],
+        #num_workers=config['batch_size'],
         worker_init_fn=seed_worker,
         generator=g
     )
@@ -462,7 +465,7 @@ def torch_train(config):
         test_dataset,
         batch_size=config['batch_size'],
         shuffle=False,
-        num_workers=config['batch_size'],
+        #num_workers=config['batch_size'],
         worker_init_fn=seed_worker,
         generator=g
     )
@@ -498,6 +501,8 @@ def torch_train(config):
 
     os.makedirs(MODEL_FOLDER, exist_ok=True)
 
+    writer = SummaryWriter()
+
     # training loop
     best_val_accuracy = 0.0
     for epoch in range(config['epochs']):
@@ -526,6 +531,14 @@ def torch_train(config):
 
         train_accuracy = calculate_accuracy(model, train_loader)
         val_accuracy = calculate_accuracy(model, val_loader)
+
+        test_accuracy = calculate_accuracy(model, test_loader)
+
+        writer.add_scalar("Loss/train", running_loss, epoch)
+        writer.add_scalar("Accuracy/train", train_accuracy, epoch)
+        writer.add_scalar("Accuracy/val", val_accuracy, epoch)
+        writer.add_scalar("Accuracy/test", test_accuracy, epoch)
+
         improved = False
         if val_accuracy >= best_val_accuracy:
             best_val_accuracy = val_accuracy
@@ -540,6 +553,8 @@ def torch_train(config):
             val_accuracy,
             '; saved' if improved else ''
         ))
+    writer.flush()
+    writer.close()
 
     # Reload best model for test
     model.load_state_dict(torch.load(get_model_path(config)))
