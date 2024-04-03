@@ -9,8 +9,12 @@ from continual_nystromformer import (
 from nystromformer import _scaled_dot_product_attention
 from utils import qk_product, iterative_inv, odot
 
-def compute_diff(pred, target):
-    diff = torch.abs(pred - target)
+def compute_diff(pred, target, mode="l2"):
+    assert mode in ["l1", "l2"]
+    if mode == "l2":
+        diff = torch.sqrt(torch.sum(torch.pow(torch.subtract(pred, target), 2), dim=0))
+    else:  # abs
+        diff = torch.abs(pred - target)
     print("Mean: "+str(torch.mean(diff)))
     print("Max: "+str(torch.max(diff)))
 
