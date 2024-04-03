@@ -21,17 +21,17 @@ State = Tuple[
 
     Tensor,  # Q (B, n, d) # Used to compute new landmarks
     Tensor,  # K (B, n, d) # Used to retrieve k_old and to compute new landmarks
-    Tensor,  # V (B, n, d) # Used for the last multiplication
+    Tensor,  # V (B, n, d) # Used for the last multiplication when updating landmarks
 
     # Values used for updates without landmark updates
     Tensor,  # BetaD_GammaD_mem (B, n-1, m)
     Tensor,  # Gamma_D (B, m, m)
-    Tensor,  # Delta_mem (B, m, n-1)
-    Tensor,  # d_Delta_mem (B, m, 1)
+    Tensor,  # d_Delta_prev (B, m, 1)
+    Tensor,  # DeltaV_prev (B, m, d)
 
     # Additional values just used for updates with landmark updates
-    Tensor,  # d_Beta_mem (B, n-1, 1) # We only need to store the m-1 values for when we update the landmarks
-    Tensor,  # d_Gamma_mem (B, m-1, 1)
+    Tensor,  # d_Beta_prev (B, n-1, 1) # We only need to store the m-1 values for when we update the landmarks
+    Tensor,  # d_Gamma_prev (B, m-1, 1)
     Tensor,  # Beta_mem (B, n-1, m-1)
     Tensor,  # Gamma_mem (B, m-1, m-1)
 
@@ -65,8 +65,8 @@ def _scaled_dot_product_attention_default_state(
 
         init_fn((B, n-1, m)),
         init_fn((B, m, m)),
-        init_fn((B, m, n-1)),
         init_fn((B, m, 1)),
+        init_fn((B, m, d)),
 
         init_fn(B, n-1, 1),
         init_fn(B, m-1, 1),
@@ -150,12 +150,13 @@ def _scaled_dot_product_attention(
     Beta_D = odot(d_Beta, Beta)
     Gamma_D = odot(d_Gamma, Gamma)
     Gamma_D = iterative_inv(Gamma_D)  # TODO: Improved formulation coming
-    Delta_D = odot(d_Delta, Delta)
 
     BetaD_GammaD = torch.bmm(Beta_D, Gamma_D)
-    Delta_V = torch.bmm(Delta_D, V)
 
-    output = torch.bmm(BetaD_GammaD, Delta_V)
+    Delta_V = torch.bmm(Delta, V)
+    Delta_DV = odot(d_Delta, Delta_V)
+
+    output = torch.bmm(BetaD_GammaD, Delta_DV)
 
     prev_state = (
         Q_tilde,
@@ -167,8 +168,8 @@ def _scaled_dot_product_attention(
 
         BetaD_GammaD[:, 1:],
         Gamma_D,
-        Delta[:, :, 1:],
         d_Delta,
+        Delta_V,
 
         d_Beta[:, 1:],
         d_Gamma[:, 1:],
@@ -228,11 +229,11 @@ def _scaled_dot_product_attention_step(
 
         BetaD_GammaD_mem,
         Gamma_D,
-        Delta_mem,
-        d_Delta_mem,
+        d_Delta_prev,
+        DeltaV_prev,
 
-        d_Beta_mem,
-        d_Gamma_mem,
+        d_Beta_prev,
+        d_Gamma_prev,
         Beta_mem,
         Gamma_mem,
 
@@ -258,6 +259,7 @@ def _scaled_dot_product_attention_step(
     k_new = torch.div(k_new, math.sqrt(math.sqrt(d)))
 
     k_old = K[:, 0].unsqueeze(-2)
+    v_old = V[:, 0].unsqueeze(-2)
 
     Q = torch.cat((
         Q[:, 1:],
@@ -323,15 +325,8 @@ def _scaled_dot_product_attention_step(
         Gamma = continual_matrix_concat(Gamma_mem, Gamma_A, Gamma_B, Gamma_C)
         Gamma_mem = Gamma[:, 1:, 1:]
 
-        # Delta update
-        Delta_A = qk_product(Q_tilde_mem, k_new)
-        Delta_B = qk_product(q_tilde_new, K_mem)
-        Delta_C = qk_product(q_tilde_new, k_new)
-        Delta = continual_matrix_concat(Delta_mem[:, 1:], Delta_A, Delta_B, Delta_C)
-        Delta_mem = Delta[:, :, 1:]
-
         # d_Beta update
-        d_Beta = d_Beta_mem - qk_product(Q_mem, k_tilde_old) + qk_product(Q_mem, k_tilde_new)
+        d_Beta = d_Beta_prev - qk_product(Q_mem, k_tilde_old) + qk_product(Q_mem, k_tilde_new)
         d_Beta_new = torch.cat((
             qk_product(q_new, K_tilde_mem),
             qk_product(q_new, k_tilde_new)
@@ -348,7 +343,7 @@ def _scaled_dot_product_attention_step(
         d_Beta_mem = d_Beta[:, 1:]
 
         # Next: d_Gamma update
-        d_Gamma = d_Gamma_mem - qk_product(Q_tilde_mem, k_tilde_old) + qk_product(Q_tilde_mem, k_tilde_new)
+        d_Gamma = d_Gamma_prev - qk_product(Q_tilde_mem, k_tilde_old) + qk_product(Q_tilde_mem, k_tilde_new)
         d_Gamma_new = torch.cat((
             qk_product(q_tilde_new, K_tilde_mem),
             qk_product(q_tilde_new, k_tilde_new)
@@ -365,7 +360,10 @@ def _scaled_dot_product_attention_step(
         d_Gamma_mem = d_Gamma[:, 1:]
 
         # Next: d_Delta update
-        d_Delta = d_Delta_mem[:, 1:] - qk_product(Q_tilde_mem, k_old) + qk_product(Q_tilde_mem, k_new)
+        Delta_old = qk_product(Q_tilde_mem, k_old)
+        Delta_new = qk_product(Q_tilde_mem, k_new)
+
+        d_Delta = d_Delta_prev[:, 1:] - Delta_old + Delta_new
         d_Delta_new = torch.cat((
             qk_product(q_tilde_new, K_mem),
             qk_product(q_tilde_new, k_tilde_new)
@@ -379,18 +377,33 @@ def _scaled_dot_product_attention_step(
             ),
             dim=1
         )
-        d_Delta_mem = d_Delta
+
+        # Delta^D V
+        DeltaV_prev = DeltaV_prev[:, 1:]
+        DeltaV_prev = DeltaV_prev - torch.bmm(Delta_old, v_old) + torch.bmm(Delta_new, v_new)
+
+        DeltaV_new_row = torch.bmm(qk_product(q_tilde_new, K), V)
+
+        Delta_V = torch.cat((
+            DeltaV_prev,
+            DeltaV_new_row
+            ),
+            dim=1
+        )
+        # Delta^D odot
+        DeltaD_V = odot(d_Delta, Delta_V)
 
         # Vector matrix multiplications
         Beta_D = odot(d_Beta, Beta)
         Gamma_D = iterative_inv(odot(d_Gamma, Gamma))
-        Delta_D = odot(d_Delta_mem, Delta)
 
         BetaD_GammaD = torch.bmm(Beta_D, Gamma_D)
         BetaD_GammaD_mem = BetaD_GammaD[:, 1:]
 
     else:
         # Same landmarks
+        d_Gamma_mem = d_Gamma_prev
+
         # Beta^D * Gamma^D computation
         Beta_new = qk_product(q_new, K_tilde)
         d_Beta_new = torch.bmm(Beta_new, torch.ones((B, m, 1), device=device))
@@ -404,25 +417,15 @@ def _scaled_dot_product_attention_step(
         )
         BetaD_GammaD_mem = BetaD_GammaD[:, 1:]
 
-        # Delta computation
+        # Delta^D * V computation
+        Delta_old = qk_product(Q_tilde, k_old)
         Delta_new = qk_product(Q_tilde, k_new)
-        Delta = torch.cat((
-            Delta_mem,
-            Delta_new
-            ),
-            dim=2
-        )
-        Delta_mem = Delta[:, :, 1:]
 
-        # d_Delta
-        d_Delta_old = qk_product(Q_tilde, k_old)  # TODO: We can cache this operation when k_old is k_new
-        d_Delta_new = Delta_new
-
-        d_Delta = d_Delta_mem - d_Delta_old + d_Delta_new
-        d_Delta_mem = d_Delta
+        Delta_V = DeltaV_prev - torch.bmm(Delta_old, v_old) + torch.bmm(Delta_new, v_new)
+        d_Delta = d_Delta_prev - Delta_old + Delta_new
 
         # Delta^D odot
-        Delta_D = odot(d_Delta, Delta)
+        DeltaD_V = odot(d_Delta, Delta_V)
 
         # Update Beta_mem and d_Beta_mem
         Beta_mem = torch.cat((
@@ -432,16 +435,14 @@ def _scaled_dot_product_attention_step(
             dim=1
         )
         d_Beta_mem = torch.cat((
-            d_Beta_mem[:, 1:],
+            d_Beta_prev[:, 1:],
             d_Beta_new
             ),
             dim=1
         )
 
     # Operations common to both branches
-    # Delta^D * V multiplication
-    Delta_V = torch.bmm(Delta_D, V)   # TODO: We need to make this continual
-    output = torch.bmm(BetaD_GammaD, Delta_V)
+    output = torch.bmm(BetaD_GammaD, DeltaD_V)
 
     new_states = (
         Q_tilde,
@@ -453,8 +454,8 @@ def _scaled_dot_product_attention_step(
 
         BetaD_GammaD_mem,
         Gamma_D,
-        Delta_mem,
-        d_Delta_mem,
+        d_Delta,
+        Delta_V,
 
         d_Beta_mem,
         d_Gamma_mem,
@@ -466,5 +467,5 @@ def _scaled_dot_product_attention_step(
     )
 
     if iteration == last_iter:
-        return output, new_states, (Beta_D_new, Gamma_D, Delta_D)
+        return output, new_states, (Beta_D_new, Gamma_D)
     return output, new_states, ()

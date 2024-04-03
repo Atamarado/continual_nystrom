@@ -83,15 +83,13 @@ def test_scaled_dot_product_attention_step():
             state, query1[:, i], key1[:, i], value1[:, i], last_iter=N
         )
 
-    kernel1, kernel2, kernel3 = kernels
-    Beta, Gamma, Delta = continual_kernels
+    kernel1, kernel2, _ = kernels
+    Beta, Gamma = continual_kernels
 
     print("\nDifference Beta (last token): ")
     compute_diff(kernel1[:, N-1], Beta)
     print("\nDifference Gamma: ")
     compute_diff(kernel2, Gamma)
-    print("\nDifference Delta: ")
-    compute_diff(kernel3, Delta)
     print("\nDifference outputs: ")
     compute_diff(output_step, target1)
 
