@@ -16,7 +16,7 @@ def compute_diff(pred, target, mode="l2"):
     else:  # abs
         diff = torch.abs(pred - target)
     print("Mean: "+str(torch.mean(diff)))
-    print("Max: "+str(torch.max(diff)))
+    print("Max: "+str(torch.max(torch.abs(torch.subtract(pred, target)))))
 
 def compute_landmarks(state: State, q, k, m):
     device = q.device
