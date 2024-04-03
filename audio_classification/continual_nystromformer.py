@@ -130,8 +130,8 @@ def _scaled_dot_product_attention(
 
     device = q.device
 
-    Q = q / math.sqrt(math.sqrt(E))
-    K = k / math.sqrt(math.sqrt(E))
+    Q = torch.div(q, math.sqrt(math.sqrt(E)))
+    K = torch.div(k, math.sqrt(math.sqrt(E)))
     V = v
 
     # Landmark selection
@@ -192,7 +192,8 @@ def _scaled_dot_product_attention_step(
     last_iter: int,
     attn_mask: Optional[Tensor] = None,
     dropout_p: float = 0.0,
-    use_conv: bool = False
+    use_conv: bool = False,
+    update_landmarks: bool = True,
 ) -> Tuple[Tensor, State, Tuple]: # TODO: Change back to [Tensor, State]
     """
     Computes the Continual Retroactive Scaled Nyströmformer Dot-Product Attention on query, key and value tensors.
@@ -282,7 +283,7 @@ def _scaled_dot_product_attention_step(
 
     Beta_D_new = None # TODO: Remove later
 
-    if iteration % tokens_per_landmark == tokens_per_landmark - 1:
+    if update_landmarks and (iteration % tokens_per_landmark == tokens_per_landmark - 1):
         # Landmark changes
         # New landmarks
         q_tilde_new = Q[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2)

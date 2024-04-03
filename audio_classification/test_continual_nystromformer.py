@@ -1,13 +1,79 @@
 import torch
 import math
 
-from continual_nystromformer import _scaled_dot_product_attention_step, _scaled_dot_product_attention_default_state
+from continual_nystromformer import (
+    _scaled_dot_product_attention_step,
+    _scaled_dot_product_attention_default_state,
+    State
+)
 from nystromformer import _scaled_dot_product_attention
+from utils import qk_product, iterative_inv, odot
 
 def compute_diff(pred, target):
     diff = torch.abs(pred - target)
     print("Mean: "+str(torch.mean(diff)))
     print("Max: "+str(torch.max(diff)))
+
+def compute_landmarks(state: State, q, k, m):
+    device = q.device
+
+    (
+        _, # Q_tilde
+        _, # K_tilde
+
+        _,
+        _,
+        V,
+
+        BetaD_GammaD_mem,
+        _, # Gamma_D
+        d_Delta_prev,
+        DeltaV_prev,
+
+        d_Beta_prev,
+        _, # d_Gamma_prev
+        Beta_mem,
+        _, # Gamma_mem
+
+        state_index,
+        iteration
+    ) = state
+
+    B, Nt, E = q.shape
+    q = torch.div(q, math.sqrt(math.sqrt(E)))
+    k = torch.div(k, math.sqrt(math.sqrt(E)))
+
+    Q_tilde = q.reshape(-1, m, Nt // m, E).mean(dim=-2)
+    K_tilde = k.reshape(-1, m, Nt // m, E).mean(dim=-2)
+
+    Gamma = qk_product(Q_tilde, K_tilde)
+    d_Gamma = torch.bmm(Gamma, torch.ones((B, m, 1), device=device))
+    Gamma_D = odot(d_Gamma, Gamma)
+    Gamma_D_inv = iterative_inv(Gamma_D)
+
+    state = (
+        Q_tilde,
+        K_tilde,
+
+        q,
+        k,
+        V,
+
+        BetaD_GammaD_mem,
+        Gamma_D_inv,
+        d_Delta_prev,
+        DeltaV_prev,
+
+        d_Beta_prev,
+        d_Gamma[:, 1:],
+        Beta_mem,
+        Gamma[:, 1:, 1:],
+
+        state_index,
+        iteration
+    )
+
+    return state
 
 def test_scaled_dot_product_attention_step():
     N = 1000  # sequence length
@@ -78,9 +144,12 @@ def test_scaled_dot_product_attention_step():
 
     # Now, let's try from zero-init
     state = _scaled_dot_product_attention_default_state(B, N, E, H, m)
+    state = compute_landmarks(state, query1, key1, m)
     for i in range(N):
+        if i == N-1:
+            pass
         output_step, state, continual_kernels = _scaled_dot_product_attention_step(
-            state, query1[:, i], key1[:, i], value1[:, i], last_iter=N
+            state, query1[:, i], key1[:, i], value1[:, i], last_iter=N, update_landmarks=False
         )
 
     kernel1, kernel2, _ = kernels
