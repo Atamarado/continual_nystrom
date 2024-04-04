@@ -334,7 +334,7 @@ def get_tf_flops(model):
         flops = tf.compat.v1.profiler.profile(graph=graph, run_meta=run_meta, cmd="op", options=opts)
         return flops.total_float_ops / 2
 
-def get_features_and_labels():
+def get_features_and_labels(seed=None):
     if os.path.exists(GTZAN_FEATURES_CACHE_PATH):
         with open(GTZAN_FEATURES_CACHE_PATH, 'rb') as gtzan_file:
             cached_data = pickle.load(gtzan_file)
@@ -364,6 +364,12 @@ def get_features_and_labels():
             }, cache_file, protocol=4)
     all_features = np.array(all_features)
     all_labels = np.array(all_labels)
+
+    if seed:
+        per = np.random.RandomState(seed=seed).permutation(len(all_features))
+        all_features = all_features[per]
+        all_labels = all_labels[per]
+
     val_split = int((1 - GTZAN_VIT_VAL_RATIO - GTZAN_VIT_TEST_RATIO) * all_features.shape[0])
     test_split = int((1 - GTZAN_VIT_TEST_RATIO) * all_features.shape[0])
     train_features = all_features[:val_split]
@@ -375,11 +381,11 @@ def get_features_and_labels():
     return (train_features, train_labels), (val_features, val_labels), (test_features, test_labels)
 
 class TorchGTZANDataset(torch.utils.data.Dataset):
-    def __init__(self, split):
+    def __init__(self, split, seed):
         self.split = split
         (train_features, train_labels), \
         (val_features, val_labels), \
-        (test_features, test_labels) = get_features_and_labels()
+        (test_features, test_labels) = get_features_and_labels(seed=seed)
         if split == 'train':
             self.features = train_features
             self.labels = train_labels
@@ -418,12 +424,13 @@ def calculate_accuracy(model, data_loader):
 
 MODEL_FOLDER = "saved_models"
 def get_model_path(config):
-    return '%s/%s_%d_layers_%s_%s.pth' % (
+    return '%s/%s_%d_layers_%s_%s_%s.pth' % (
         MODEL_FOLDER,
         config['model'],
         config['num_layers'],
         config['version'],
-        config['seed']
+        config['model_seed'],
+        config['data_seed']
     )
 
 def seed_worker(_):
@@ -431,18 +438,31 @@ def seed_worker(_):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
+DATASET_FOLDER = "gtzan_datasets"
+try:
+    import cPickle as pickle
+except ModuleNotFoundError:
+    import pickle
+
+def get_dataset(split, seed):
+    path = os.path.join(DATASET_FOLDER, split+"_"+str(seed)+".pkl")
+    if os.path.exists(path):
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    else:
+        dataset = TorchGTZANDataset(split, seed)
+        with open(path, 'wb') as f:
+            pickle.dump(dataset, f)
+        return dataset
+
+
 def torch_train(config):
     assert config["model"] in ["base", "base_continual", "nystromformer", "continual_nystrom"]
 
-    if config['seed']:
-        torch.manual_seed(config['seed'])
-        random.seed(config['seed'])
-        np.random.seed(config['seed'])
-
     g = torch.Generator()
-    g.manual_seed(0)
+    g.manual_seed(config["data_seed"])
 
-    train_dataset = TorchGTZANDataset('train')
+    train_dataset = get_dataset('train', config["data_seed"])
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=config['batch_size'],
@@ -451,7 +471,7 @@ def torch_train(config):
         worker_init_fn=seed_worker,
         generator=g
     )
-    val_dataset = TorchGTZANDataset('val')
+    val_dataset = get_dataset('val', config["data_seed"])
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=config['batch_size'],
@@ -460,7 +480,7 @@ def torch_train(config):
         worker_init_fn=seed_worker,
         generator=g
     )
-    test_dataset = TorchGTZANDataset('test')
+    test_dataset = get_dataset('test', config["data_seed"])
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=config['batch_size'],
@@ -469,6 +489,11 @@ def torch_train(config):
         worker_init_fn=seed_worker,
         generator=g
     )
+
+    if config['model_seed']:
+        torch.manual_seed(config['model_seed'])
+        random.seed(config['model_seed'])
+        np.random.seed(config['model_seed'])
 
     # create and load mode
     match config["model"]:
@@ -560,7 +585,7 @@ def torch_train(config):
     model.load_state_dict(torch.load(get_model_path(config)))
     test_accuracy = calculate_accuracy(model, test_loader)
 
-    return model, best_val_accuracy, test_accuracy
+    return model, train_accuracy, best_val_accuracy, test_accuracy
 
 def get_flops_and_params(model, config):
     if config['model'] in ["base_continual", "continual_nystrom"]:
@@ -583,45 +608,61 @@ def std(lst):
     variance = sum([((x - mean) ** 2) for x in lst]) / len(lst)
     return variance ** 0.5
 
-def evaluate_config(config, num_seeds=5):
+def evaluate_config(config, num_seeds=5, filename="results.txt", flops=False, params=False):
 
-    val_accuracies = []
-    test_accuracies = []
-    flops_list = []
-    params_list = []
-    for seed in range(num_seeds):
-        config["seed"] = seed
-        print(config["model"], "model with "+str(config["num_layers"])+". Seed: "+str(config["seed"]))
-        model, val_accuracy, test_accuracy = torch_train(config)
-        flops, params = get_flops_and_params(model, config)
-        print(test_accuracy, flops, params)
+    for data_seed in range(num_seeds):
+        train_accuracies = []
+        val_accuracies = []
+        test_accuracies = []
+        flops_list = []
+        params_list = []
 
-        val_accuracies.append(val_accuracy)
-        test_accuracies.append(test_accuracy)
-        flops_list.append(flops)
-        params_list.append(params)
 
-    print("---------------------")
-    print(config["model"], "model with " + str(config["num_layers"]) + " layers")
-    print("Mean:")
-    print("\tval_acc:", str(sum(val_accuracies)/len(val_accuracies)))
-    print("\ttest_acc:", str(sum(test_accuracies)/len(test_accuracies)))
-    print("\tflops:", str(sum(flops_list)/len(flops_list)))
-    print("\tparams:", str(sum(params_list)/len(params_list)))
-    print()
+        config["data_seed"] = data_seed
+        for model_seed in range(num_seeds):
+            config["model_seed"] = model_seed
+            print(config["model"], "model with "+str(config["num_layers"])+". Seed: "+str(config["model_seed"]))
+            model, train_accuracy, val_accuracy, test_accuracy = torch_train(config)
+            flops, params = get_flops_and_params(model, config)
+            print(test_accuracy, flops, params)
 
-    print("Std:")
-    print("\tval_acc:", str(std(val_accuracies)))
-    print("\ttest_acc:", str(std(test_accuracies)))
-    print("\tflops:", str(std(flops_list)))
-    print("\tparams:", str(std(params_list)))
+            train_accuracies.append(train_accuracy)
+            val_accuracies.append(val_accuracy)
+            test_accuracies.append(test_accuracy)
+            flops_list.append(flops)
+            params_list.append(params)
 
-    print("---------------------")
+        with open(filename, 'a') as f:
 
-    print("Individual values:")
-    for seed in range(len(val_accuracies)):
-        print("Seed", str(seed))
-        print("\t", str(val_accuracies[seed]), str(test_accuracies[seed]), str(flops_list[seed]), str(params_list[seed]))
+            f.write("---------------------\n")
+            f.write("Data seed "+str(data_seed))
+            f.write(config["model"]+" model with " + str(config["num_layers"]) + " layers\n")
+            f.write("Mean:")
+            f.write("\t train_acc: %.2f" % (sum(train_accuracies) / len(train_accuracies)))
+            f.write("\t val_acc: %.2f" % (sum(val_accuracies)/len(val_accuracies)))
+            f.write("\t test_acc: %.2f" % (sum(test_accuracies)/len(test_accuracies)))
+            if flops:
+                f.write("\t flops: %.2f" % (sum(flops_list)/len(flops_list)))
+            if params:
+                f.write("\t params: %.2f" % (sum(params_list)/len(params_list)))
+            f.write("\n")
+
+            f.write("Std:")
+            f.write("\t train_acc: %.2f" % (std(train_accuracies)))
+            f.write("\t val_acc: %.2f" % (std(val_accuracies)))
+            f.write("\t test_acc: %.2f" % (std(test_accuracies)))
+            if flops:
+                f.write("\t flops: %.2f" % (std(flops_list)))
+            if params:
+                f.write("\t params: %.2f" % (std(params_list)))
+            f.write("\n")
+
+    # print("---------------------")
+    #
+    # print("Individual values:")
+    # for seed in range(len(val_accuracies)):
+    #     print("Seed", str(seed))
+    #     print("\t", str(val_accuracies[seed]), str(test_accuracies[seed]), str(flops_list[seed]), str(params_list[seed]))
 
     print("End of evaluation ---------------------------------")
 
