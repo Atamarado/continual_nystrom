@@ -9,14 +9,12 @@ import torch.optim as optim
 import torch.nn as nn
 assert torch.cuda.is_available()
 
-import os
 import gdown
 import urllib.request
 import librosa
 import math
 import numpy as np
 import pandas as pd
-import pickle
 import sys
 from ptflops import get_model_complexity_info # TODO: Check whether to use the version in continual_transformers
 from audioread import NoBackendError
@@ -26,7 +24,7 @@ import random
 from preprocess_sound import preprocess_sound
 from gtzan_config import *
 from models import NonCoVisionTransformer, CoVisionTransformer
-from nystromformer import Nystromformer, ContinualNystromformer
+from audio_classification.nystromformer.nystromformer import Nystromformer, ContinualNystromformer
 
 # ROOT_DIR = '.'
 # os.chdir(ROOT_DIR)
