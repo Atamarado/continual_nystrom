@@ -6,7 +6,7 @@ from nystromformer.continual_nystromformer import (
     _scaled_dot_product_attention_default_state,
     State
 )
-from nystromformer.nystromformer import _scaled_dot_product_attention
+from nystromformer.nystromformer import _scaled_dot_product_attention, get_landmarks
 from nystromformer.utils import qk_product, iterative_inv, odot
 
 def compute_diff(pred, target, mode="l2"):
@@ -47,8 +47,8 @@ def compute_landmarks(state: State, q, k, m):
     q = torch.div(q, math.sqrt(math.sqrt(E)))
     k = torch.div(k, math.sqrt(math.sqrt(E)))
 
-    Q_tilde = q.reshape(-1, m, Nt // m, E).mean(dim=-2)
-    K_tilde = k.reshape(-1, m, Nt // m, E).mean(dim=-2)
+    Q_tilde = get_landmarks(q, m)
+    K_tilde = get_landmarks(k, m)
 
     Gamma = qk_product(Q_tilde, K_tilde)
     d_Gamma = torch.bmm(Gamma, torch.ones((B, m, 1), device=device))
@@ -148,12 +148,10 @@ def test_scaled_dot_product_attention_step():
 
     # Now, let's try from zero-init
     state = _scaled_dot_product_attention_default_state(B, N, E, H, m)
-    state = compute_landmarks(state, query1, key1, m)
+    #state = compute_landmarks(state, query1, key1, m)
     for i in range(N):
-        if i == N-1:
-            pass
         output_step, state = _scaled_dot_product_attention_step(
-            state, query1[:, i], key1[:, i], value1[:, i], update_landmarks=False
+            state, query1[:, i], key1[:, i], value1[:, i]#, update_landmarks=False
         )
 
     # kernel1, kernel2, _ = kernels
