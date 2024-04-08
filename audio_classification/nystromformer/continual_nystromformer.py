@@ -252,6 +252,10 @@ def _scaled_dot_product_attention_step(
     _, n, m = BetaD_GammaD_mem.shape
     n += 1
     tokens_per_landmark = n // m
+
+    if (iteration % n) < (n % m):
+        tokens_per_landmark += 1  # If the token we are replacing corresponds to one of the longest landmarks, then we add one more
+
     d = E
 
     q_new = torch.reshape(q_step, (B, 1, d))
