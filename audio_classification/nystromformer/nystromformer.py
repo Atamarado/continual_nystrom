@@ -79,6 +79,33 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
         return X.reshape(X.size(0), X.size(1), self.num_head, self.head_dim)
 
 
+def get_landmarks(matrix, m):
+    B, n, E = matrix.shape
+
+    mod = n % m
+    if mod == 0:
+        # Basic case, all landmarks contain the same number of points
+        return matrix.reshape(-1, m, n // m, E).mean(dim=-2)
+
+    # The first n%m landmarks contain one extra point
+    min_points_per_landmark = n // m
+
+    landmark_split_point = (min_points_per_landmark + 1)*mod
+    num_landmarks_first = mod
+    num_landmarks_last = m - mod
+
+    first_landmarks = matrix[:, :landmark_split_point].reshape(B, num_landmarks_first, landmark_split_point // num_landmarks_first, E).mean(dim=-2)
+    last_landmarks = matrix[:, landmark_split_point:].reshape(B, num_landmarks_last, (n - landmark_split_point) // num_landmarks_last, E).mean(dim=-2)
+
+    return torch.cat(
+        (
+            first_landmarks,
+            last_landmarks
+        ),
+        dim=1
+    )
+
+
 
 def _scaled_dot_product_attention(
     q: Tensor,
@@ -126,8 +153,6 @@ def _scaled_dot_product_attention(
 
     B, Nt, E = q.shape
 
-    assert Nt % m == 0, "The sequence length must be divisible bt the number of landmarks"
-
     q = torch.div(q, math.sqrt(math.sqrt(E)))
     k = torch.div(k, math.sqrt(math.sqrt(E)))
 
@@ -136,8 +161,8 @@ def _scaled_dot_product_attention(
         attn = torch.nn.functional.softmax(torch.bmm(q, k.transpose(-1, -2)), dim=-1)  # - 1e9 * (1 - mask[:, None, None, :]), dim = -1)
         output = torch.bmm(attn, v)
     else:
-        q_landmarks = q.reshape(-1, m, Nt // m, E).mean(dim=-2)
-        k_landmarks = k.reshape(-1, m, Nt // m, E).mean(dim=-2)
+        q_landmarks = get_landmarks(q, m)
+        k_landmarks = get_landmarks(k, m)
 
         kernel_1 = torch.nn.functional.softmax(torch.bmm(q, k_landmarks.transpose(-1, -2)), dim=-1)
         kernel_2 = torch.nn.functional.softmax(torch.bmm(q_landmarks, k_landmarks.transpose(-1, -2)), dim=-1)
