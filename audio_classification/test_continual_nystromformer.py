@@ -1,13 +1,13 @@
 import torch
 import math
 
-from continual_nystromformer import (
+from nystromformer.continual_nystromformer import (
     _scaled_dot_product_attention_step,
     _scaled_dot_product_attention_default_state,
     State
 )
-from nystromformer import _scaled_dot_product_attention
-from utils import qk_product, iterative_inv, odot
+from nystromformer.nystromformer import _scaled_dot_product_attention
+from nystromformer.utils import qk_product, iterative_inv, odot
 
 def compute_diff(pred, target, mode="l2"):
     assert mode in ["l1", "l2"]
@@ -144,7 +144,7 @@ def test_scaled_dot_product_attention_step():
     #
     # assert torch.allclose(target2, output2, atol=1e-6)
 
-    target1 = _scaled_dot_product_attention(query1, key1, value1)
+    target1 = _scaled_dot_product_attention(query1, key1, value1, m)
 
     # Now, let's try from zero-init
     state = _scaled_dot_product_attention_default_state(B, N, E, H, m)
@@ -153,7 +153,7 @@ def test_scaled_dot_product_attention_step():
         if i == N-1:
             pass
         output_step, state = _scaled_dot_product_attention_step(
-            state, query1[:, i], key1[:, i], value1[:, i], last_iter=N, update_landmarks=False
+            state, query1[:, i], key1[:, i], value1[:, i], update_landmarks=False
         )
 
     # kernel1, kernel2, _ = kernels
