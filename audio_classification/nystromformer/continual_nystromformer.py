@@ -580,24 +580,23 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         self.register_buffer("iteration", torch.tensor(0), persistent=False)
 
     def get_state(self) -> Optional[State]:
-        if len(self.d_mem) > 0:
-            return (
-                self.Q_tilde,
-                self.K_tilde,
-                self.Q,
-                self.K,
-                self.V,
-                self.BetaD_GammaD_mem,
-                self.Gamma_D,
-                self.d_Delta_prev,
-                self.DeltaV_prev,
-                self.d_Beta_prev,
-                self.d_Gamma_prev,
-                self.Beta_mem,
-                self.Gamma_mem,
-                self.state_index,
-                self.iteration,
-            )
+        return (
+            self.Q_tilde,
+            self.K_tilde,
+            self.Q,
+            self.K,
+            self.V,
+            self.BetaD_GammaD_mem,
+            self.Gamma_D,
+            self.d_Delta_prev,
+            self.DeltaV_prev,
+            self.d_Beta_prev,
+            self.d_Gamma_prev,
+            self.Beta_mem,
+            self.Gamma_mem,
+            self.state_index,
+            self.iteration,
+        )
 
     def set_state(self, state: State):
         (
@@ -698,9 +697,9 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
               E is the embedding dimension. :math:`(N, L, E)` if ``batch_first`` is ``True``.
               :math:`(N, E, L)` if ``batch_first`` and ``embed_dim_second ``True``.
         """
-        if not key:
+        if key is None:
             key = query
-        if not value:
+        if value is None:
             value = query
 
         o, new_state = _scaled_dot_product_attention_step(
