@@ -23,8 +23,8 @@ import random
 
 from preprocess_sound import preprocess_sound
 from gtzan_config import *
-from models import NonCoVisionTransformer, CoVisionTransformer
-from audio_classification.nystromformer.nystromformer import Nystromformer, ContinualNystromformer
+from models import NonCoVisionTransformer, CoVisionTransformer, CoNystromVisionTransformer, NonCoNystromVisionTransformer
+#from audio_classification.nystromformer.nystromformer import Nystromformer, ContinualNystromformer
 
 # ROOT_DIR = '.'
 # os.chdir(ROOT_DIR)
@@ -500,9 +500,9 @@ def torch_train(config):
         case "base_continual":
             model_class = CoVisionTransformer
         case "nystromformer":
-            model_class = Nystromformer
+            model_class = NonCoNystromVisionTransformer
         case "continual_nystrom":
-            model_class = ContinualNystromformer
+            model_class = CoNystromVisionTransformer
 
     model = model_class(
         sequence_len=SEQ_LEN,
@@ -555,12 +555,9 @@ def torch_train(config):
         train_accuracy = calculate_accuracy(model, train_loader)
         val_accuracy = calculate_accuracy(model, val_loader)
 
-        test_accuracy = calculate_accuracy(model, test_loader)
-
         writer.add_scalar("Loss/train", running_loss, epoch)
         writer.add_scalar("Accuracy/train", train_accuracy, epoch)
         writer.add_scalar("Accuracy/val", val_accuracy, epoch)
-        writer.add_scalar("Accuracy/test", test_accuracy, epoch)
 
         improved = False
         if val_accuracy >= best_val_accuracy:
@@ -629,6 +626,7 @@ def evaluate_config(config, num_seeds=5, filename="results.txt", flops=False, pa
             test_accuracies.append(test_accuracy)
             flops_list.append(flops)
             params_list.append(params)
+            break  # TODO: One model seed to speed things up. Remove later
 
         with open(filename, 'a') as f:
 
@@ -719,19 +717,19 @@ if __name__ == "__main__":
         'epochs': 50,
         'version': 'v5',
         'num_layers': 1,
-        'model': 'base'
+        'model': 'nystromformer'
     }
-    evaluate_config(torch_config)
+    evaluate_config(torch_config, filename="results_conystrom.txt")
 
     torch_config["num_layers"] = 2
-    evaluate_config(torch_config)
+    evaluate_config(torch_config, filename="results_conystrom.txt")
 
     torch_config["num_layers"] = 1
-    torch_config["model"] = "base_continual"
-    evaluate_config(torch_config)
+    torch_config["model"] = "continual_nystrom"
+    evaluate_config(torch_config, filename="results_conystrom.txt")
 
     torch_config["num_layers"] = 2
-    evaluate_config(torch_config)
+    evaluate_config(torch_config, filename="results_conystrom.txt")
 
         # torch_config = {
         #     'batch_size': 32,

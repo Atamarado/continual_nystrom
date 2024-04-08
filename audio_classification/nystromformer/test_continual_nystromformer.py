@@ -144,7 +144,7 @@ def test_scaled_dot_product_attention_step():
     #
     # assert torch.allclose(target2, output2, atol=1e-6)
 
-    target1, kernels = _scaled_dot_product_attention(query1, key1, value1)
+    target1 = _scaled_dot_product_attention(query1, key1, value1)
 
     # Now, let's try from zero-init
     state = _scaled_dot_product_attention_default_state(B, N, E, H, m)
@@ -152,17 +152,17 @@ def test_scaled_dot_product_attention_step():
     for i in range(N):
         if i == N-1:
             pass
-        output_step, state, continual_kernels = _scaled_dot_product_attention_step(
+        output_step, state = _scaled_dot_product_attention_step(
             state, query1[:, i], key1[:, i], value1[:, i], last_iter=N, update_landmarks=False
         )
 
-    kernel1, kernel2, _ = kernels
-    Beta, Gamma = continual_kernels
-
-    print("\nDifference Beta (last token): ")
-    compute_diff(kernel1[:, N-1], Beta)
-    print("\nDifference Gamma: ")
-    compute_diff(kernel2, Gamma)
+    # kernel1, kernel2, _ = kernels
+    # Beta, Gamma = continual_kernels
+    #
+    # print("\nDifference Beta (last token): ")
+    # compute_diff(kernel1[:, N-1], Beta)
+    # print("\nDifference Gamma: ")
+    # compute_diff(kernel2, Gamma)
     print("\nDifference outputs: ")
     compute_diff(output_step, target1)
 

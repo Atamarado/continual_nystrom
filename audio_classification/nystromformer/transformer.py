@@ -8,14 +8,17 @@ from torch import Tensor, nn
 
 from continual.delay import State as DelayState
 
-from .closure import Identity, Lambda
-from .container import BroadcastReduce, Residual, Sequential
-from .delay import Delay, PaddingMode
-from .linear import Linear
-from .multihead_attention import (
+from continual.closure import Identity, Lambda
+from continual.container import BroadcastReduce, Residual, Sequential
+from continual.delay import Delay, PaddingMode
+from continual.linear import Linear
+from continual.multihead_attention import (
     RetroactiveMultiheadAttention,
     SingleOutputMultiheadAttention,
 )
+
+from .nystromformer import NystromMultiheadAttention
+from .continual_nystromformer import ContinualNystromMultiheadAttention
 
 __all__ = [
     "TransformerEncoder",
@@ -31,12 +34,18 @@ class MhaType(Enum):
     - RETROACTIVE:      RetroactiveMultiheadAttention
     - SINGLE_OUTPUT:    SingleOutputMultiheadAttention
     - REGULAR:          nn.MultiheadAttention
+    - NYSTROMFORMER:        nystromformer.NystromMultiheadAttention
+    - RETROACTIVE_NYSTROM   continual_nystromformer.ContinualNystromMultiheadAttention
     """
 
     RETROACTIVE = "retroactive"
     SINGLE_OUTPUT = "single_output"
     SINGLE_OUTPUT_FORWARD = "single_output_forward"
     REGULAR = "regular"
+    NYSTROMFORMER = "nystromformer"
+    SINGLE_OUTPUT_NYSTROM = "single_output_nystrom"
+    SINGLE_OUTPUT_FORWARD_NYSTROM = "single_output_forward_nystrom"
+    RETROACTIVE_NYSTROM = "retroactive_nystrom"
 
 
 class SelectOrDelay(Delay):
@@ -405,6 +414,127 @@ def RetroactiveTransformerEncoderLayer(
         ),
     )
 
+def RetroactiveNystromTransformerEncoderLayer(
+    d_model: int,
+    nhead: int,
+    num_landmarks: int,
+    dim_feedforward: int = 2048,
+    dropout: float = 0.1,
+    activation: Union[nn.Module, Callable[[Tensor], Tensor]] = nn.functional.relu,
+    layer_norm_eps: float = 1e-5,
+    # batch_first: bool = True,
+    # norm_first: bool = False,
+    device=None,
+    dtype=None,
+    sequence_len: int = None,
+    single_output_forward=False,
+):
+    """Continual Retroactive Transformer Encoder layer.
+
+    When a new token is received, it computes the updated attention values corresponding
+    to prior tokens as well.
+
+    The continual formulation of the Transformer Encoder Layer was proposed by Hedegaard et al.
+    in "Continual Transformers: Redundancy-Free Attention for Online Inference".
+    https://arxiv.org/abs/2201.06268 (paper) https://www.youtube.com/watch?v=gy802Tlp-eQ (video).
+
+    .. note::
+        In order to handle positional encoding correctly for continual input streams, the
+        :class:`RecyclingPositionalEncoding` should be used together with this module.
+
+    Args:
+        d_model: the number of expected features in the input (required).
+        nhead: the number of heads in the multiheadattention models (required).
+        num_landmarks: the number of landmarks used in the Nyström approximation.
+        dim_feedforward: the dimension of the feedforward network model (default=2048).
+        dropout: the dropout value (default=0.1).
+        activation: the activation function of the intermediate layer, can be a string
+            ("relu" or "gelu") or a unary callable. Default: relu.
+        layer_norm_eps: the eps value in layer normalization components (default=1e-5).
+        device: torch device to initialize layer on. Defaults to None.
+        dtype: datatype of layer parameters. Defaults to None.
+        sequence_len: length of token-sequence to perform attention across. Defaults to None.
+
+    Examples::
+
+        encoder_layer = co.RetroactiveTransformerEncoderLayer(
+            d_model=512, nhead=8, sequence_len=32, dropout=0.0
+        )
+        x = torch.rand(10, 512, 32)  # (N, E, T)
+
+        # corresponds to torch.nn.TransformerEncoderLayer
+        out = encoder_layer.forward(x)
+
+        # continual inference API
+        firsts = encoder_layer.forward_steps(x[:,:,:-1])
+        last = encoder_layer.forward_step(x[:,:,-1])
+
+        assert firsts is None  # The module first needs to observe ``sequence_len`` values
+        assert torch.allclose(out, last, atol=1e-6)
+
+    """
+    assert (
+        sequence_len > 0
+    ), "Please provide a positive integer value as sequence length."
+    factory_kwargs = {"device": device, "dtype": dtype}
+    norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps, **factory_kwargs)
+    norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps, **factory_kwargs)
+
+    mha = ContinualNystromMultiheadAttention(
+        embed_dim=d_model,
+        num_heads=nhead,
+        num_landmarks=num_landmarks,
+        dropout=dropout,
+        bias=True,
+        batch_first=True,
+        embed_dim_second=True,
+        device=device,
+        dtype=dtype,
+        sequence_len=sequence_len,
+        forward_returns_attn_mask=False,
+        single_output_forward=single_output_forward,
+    )
+
+    ff = Sequential(
+        OrderedDict(
+            [
+                ("linear1", Linear(d_model, dim_feedforward, **factory_kwargs)),
+                ("activation", Lambda(activation, takes_time=True)),
+                ("dropout", nn.Dropout(dropout)),
+                ("linear2", Linear(dim_feedforward, d_model, **factory_kwargs)),
+                ("dropout2", nn.Dropout(dropout)),
+            ]
+        )
+    )
+
+    return Sequential(
+        BroadcastReduce(
+            OrderedDict(
+                [
+                    (
+                        "residual",
+                        SelectOrDelay(mha.delay) if single_output_forward
+                        else RetroactiveUnity(mha.delay)  # TODO: Changed to match SingleOutput. Change back to retroactive later
+                    ),
+                    ("self_attn", mha),
+                ]
+            ),
+            reduce="sum",
+            auto_delay=False,
+        ),
+        RetroactiveLambda(
+            nn.Sequential(
+                OrderedDict(
+                    [
+                        ("norm1", norm1),
+                        ("_ff_block", NaiveResidual(ff)),
+                        ("norm2", norm2),
+                    ]
+                )
+            )
+        ),
+    )
+
 
 # TODO: impl
 def StepLocalTransformerEncoderLayer(
@@ -483,6 +613,10 @@ def TransformerEncoderLayerFactory(
                 SingleOutputTransformerEncoderLayer, single_output_forward=True
             ),
             MhaType.REGULAR: StepLocalTransformerEncoderLayer,
+            MhaType.RETROACTIVE_NYSTROM: RetroactiveNystromTransformerEncoderLayer,
+            MhaType.SINGLE_OUTPUT_NYSTROM: RetroactiveNystromTransformerEncoderLayer,  # TODO: Change to Single Output when implemented
+            MhaType.SINGLE_OUTPUT_FORWARD_NYSTROM: RetroactiveNystromTransformerEncoderLayer,
+            MhaType.NYSTROMFORMER: None,
         }[MhaType(mha_type)]
 
         return factory_fn(
@@ -501,6 +635,139 @@ def TransformerEncoderLayerFactory(
 
     return TransformerEncoderLayer
 
+class RetroactiveNystromTransformerEncoder(Sequential):
+    """Retroactive Nystrom Continual Transformer Encoder is a stack of N Nyström encoder layers.
+
+    TODO: Change description
+    The continual formulation of the Transformer Encoder was proposed by Hedegaard et al.
+    in "Continual Transformers: Redundancy-Free Attention for Online Inference".
+    https://arxiv.org/abs/2201.06268 (paper) https://www.youtube.com/watch?v=gy802Tlp-eQ (video).
+
+    .. note::
+        This class deviates from the Pytorch implementation in the following ways:
+        1) `encoder_layer` parameter takes a factory functor, TransformerEncoderLayerFactory
+        2) `mask` and `src_key_padding_mask` are not supported currently.
+
+    .. note::
+        The efficiency gains of ``forward_step`` compared to ``forward`` is highly dependent
+        on the chosen ``num_layers``. Here, a lower ``num_layers`` is most efficient.
+        Accordingly, we recommend increasing ``d_model``, ``nhead``, and ``dim_feedforward``
+        of the :class:`TransformerEncoderLayerFactory` rather than increasing ``num_layers`` if larger
+        models are desired. Keeping the parameter-count equal, this was found to work well
+        for regular Transformer Encoders as well (https://arxiv.org/pdf/2210.00640.pdf).
+
+    .. note::
+        In order to handle positional encoding correctly for continual input streams, the
+        :class:`RecyclingPositionalEncoding` should be used together with this module.
+
+    Args:
+        encoder_layer: An instance of :class:`TransformerEncoderLayerFactory`.
+        num_layers: the number of sub-encoder-layers in the encoder (required).
+        norm: the layer normalization component (optional).
+
+    Examples::
+
+        encoder_layer = co.TransformerEncoderLayerFactory(d_model=512, nhead=8, sequence_len=32)
+        transformer_encoder = co.TransformerEncoder(encoder_layer, num_layers=2)
+        src = torch.rand(10, 512, 32)
+        out = transformer_encoder(src)
+    """
+
+    def __init__(
+        self,
+        encoder_layer: Callable[[MhaType, Optional[bool]], Sequential],
+        num_layers: int,
+        norm: nn.Module = None,
+    ):
+        layers = []
+        if num_layers == 1:
+            layers.append(encoder_layer(MhaType.SINGLE_OUTPUT_NYSTROM))
+        else:
+            layers.append(encoder_layer(MhaType.RETROACTIVE_NYSTROM))
+            for _ in range(2, num_layers - 1):
+                layers.append(
+                    RetroactiveLambda(encoder_layer(MhaType.NYSTROMFORMER), takes_time=True)
+                )
+            layers.append(
+                RetroactiveLambda(
+                    encoder_layer(MhaType.SINGLE_OUTPUT_FORWARD_NYSTROM), takes_time=True
+                )
+            )
+
+            def unity(x):
+                return x
+
+            def squeeze_last(x):
+                return x.squeeze(-1)
+
+            layers.append(
+                Lambda(unity, None, squeeze_last, squeeze_last, takes_time=True)
+            )
+
+        Sequential.__init__(self, OrderedDict([("layers", Sequential(*layers))]))
+        if norm is not None:
+            self.add_module("norm", Lambda(norm, takes_time=False))
+
+    @staticmethod
+    def build_from(
+        trans_enc: nn.TransformerEncoder, sequence_len: int
+    ) -> "TransformerEncoder":
+        assert isinstance(trans_enc, nn.TransformerEncoder)
+
+        # Create model
+        tel = trans_enc.layers[0]
+        layer_factory = TransformerEncoderLayerFactory(
+            d_model=tel.self_attn.embed_dim,
+            nhead=tel.self_attn.num_heads,
+            dim_feedforward=tel.linear1.out_features,
+            dropout=tel.dropout.p,
+            activation=tel.activation,
+            layer_norm_eps=tel.norm1.eps,
+            device=tel.linear1.weight.device,
+            dtype=tel.linear1.weight.dtype,
+            sequence_len=sequence_len,
+        )
+        net = TransformerEncoder(
+            layer_factory, num_layers=trans_enc.num_layers, norm=trans_enc.norm
+        )
+
+        # Transfer weights
+        new_sd = {}
+
+        net_keys = list(net.state_dict().keys())
+        match_keys, key_inds = zip(
+            *sorted(
+                [
+                    (
+                        k.replace("fn.", "")
+                        .replace("_ff_block.", "")
+                        .replace(".0.self_attn", ".self_attn"),
+                        i,
+                    )
+                    for i, k in enumerate(net_keys)
+                ],
+                key=lambda x: x[0],
+            )
+        )
+
+        reg_keys, weights = zip(
+            *sorted(
+                [item for item in trans_enc.state_dict().items()], key=lambda x: x[0]
+            )
+        )
+
+        assert all(
+            [
+                ".".join(k1.split(".")[-2:]) == ".".join(k2.split(".")[-2:])
+                for k1, k2 in zip(match_keys, reg_keys)
+            ]
+        )
+
+        new_sd = {net_keys[key_inds[i]]: weights[i] for i in range(len(net_keys))}
+
+        net.load_state_dict(new_sd)
+
+        return net
 
 class TransformerEncoder(Sequential):
     """Continual Transformer Encoder is a stack of N encoder layers.

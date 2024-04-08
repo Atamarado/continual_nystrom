@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import math
 
+from torch.nn.modules.activation import MultiheadAttention
+
 from abc import abstractmethod
 
 from continual.module import CoModule
@@ -10,9 +12,7 @@ from continual import RecyclingPositionalEncoding
 from continual.logging import getLogger
 from continual.module import CoModule
 
-from models import LearnedPositionalEncoding
-#from continual_nystromformer import CoNystromAttention
-from utils import iterative_inv
+from .utils import iterative_inv
 
 from typing import Any, Callable, List, Optional, Tuple, Union
 from torch import Tensor
@@ -21,7 +21,7 @@ logger = getLogger(__name__)
 logger_once = getLogger(__name__, log_once=True)
 
 
-class NystromMultiheadAttention(CoModule):
+class NystromMultiheadAttention(CoModule, MultiheadAttention):
     def __init__(
             self,
             sequence_len,
@@ -31,15 +31,16 @@ class NystromMultiheadAttention(CoModule):
             dropout=0.0,
             device=None,  # TODO: Implement
             dtype=torch.float32,
-            forward_returns_attn_mask=False
-
+            forward_returns_attn_mask=False,
+            single_output_forward=False  # TODO: Remove later
     ):
-        super().__init__()
+        super().__init__(embed_dim, num_heads)
 
         self.sequence_len = sequence_len
         self.num_head = num_heads
         self.head_dim = embed_dim // num_heads
         self.num_landmarks = num_landmarks
+        self.single_output_forward = single_output_forward
 
         self.dropout = dropout
 
@@ -49,15 +50,28 @@ class NystromMultiheadAttention(CoModule):
 
         self.ff = nn.Linear(self.num_head * self.head_dim, self.sequence_len)
 
-    def forward(self, input):
-        query, key, value = input
+    def forward(self, query, key=None, value=None):
+        #query, key, value = input
 
-        query = self.split_heads(self.W_q(query))
-        key = self.split_heads(self.W_k(key))
-        value = self.split_heads(self.W_v(value))
+        if not key:
+            key = query
+        if not value:
+            value = query
+
+        # query = self.split_heads(self.W_q(query))  # TODO: What's going on with the multiple heads?!
+        # key = self.split_heads(self.W_k(key))
+        # value = self.split_heads(self.W_v(value))
+
+        query = self.W_q(query)
+        key = self.W_k(key)
+        value = self.W_v(value)
 
         attn_out = _scaled_dot_product_attention(query, key, value, self.num_landmarks, dropout_p=self.dropout)
+
         output = self.ff(attn_out)
+
+        if self.single_output_forward:  # TODO: Remove later
+            output = output[:, :, -1].unsqueeze(-1)
 
         return output
 
@@ -74,7 +88,7 @@ def _scaled_dot_product_attention(
     attn_mask: Optional[Tensor] = None,
     dropout_p: float = 0.0,
     use_conv: bool = False
-) -> Tuple[Tensor, Tensor]:
+) -> Tuple[Tensor]:
     r"""
     Computes scaled dot product attention as in Nyströmformer on query, key and value tensors, using
     an optional attention mask if passed, and applying dropout if a probability
@@ -130,4 +144,23 @@ def _scaled_dot_product_attention(
         kernel_3 = torch.nn.functional.softmax(torch.bmm(q_landmarks, k.transpose(-1, -2)), dim=-1)  # - 1e9 * (1 - mask[:, None, None, :]), dim = -1)
         output = torch.bmm(torch.bmm(kernel_1, iterative_inv(kernel_2)), torch.bmm(kernel_3, v))
 
-    return output, torch.empty()  # TODO: See whether is necessary to return the weights or not
+    return output
+
+class LearnedPositionalEncoding(nn.Module):
+    def __init__(self, max_position_embeddings, embedding_dim, seq_length):
+        super(LearnedPositionalEncoding, self).__init__()
+        self.pe = nn.Embedding(max_position_embeddings, embedding_dim)
+        self.seq_length = seq_length
+
+        self.register_buffer(
+            "position_ids",
+            torch.arange(max_position_embeddings).expand((1, -1)),
+        )
+
+    def forward(self, x, position_ids=None):
+        if position_ids is None:
+            position_ids = self.position_ids[:, : self.seq_length]
+
+        position_embeddings = self.pe(position_ids)
+        position_embeddings = torch.permute(position_embeddings, (0, 2, 1))
+        return x + position_embeddings
