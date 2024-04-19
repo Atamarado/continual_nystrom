@@ -1,8 +1,42 @@
 import torch
+import warnings
+
+# OVERFLOW_VALUE = 88.
+# UNDERFLOW_VALUE = -103.
+OVERFLOW_VALUE = 80.
+UNDERFLOW_VALUE = -95.
+
+def fix_overflow(tensor: torch.Tensor) -> torch.Tensor:
+    diff = torch.max(tensor) - OVERFLOW_VALUE
+    return tensor - diff
+
+def fix_underflow(tensor: torch.Tensor) -> torch.Tensor:
+    diff = torch.min(tensor) + UNDERFLOW_VALUE
+    return tensor + diff
 
 # Generic qk_product
-def qk_product(q, k):
-    return torch.exp(torch.bmm(q, torch.transpose(k, 1, 2)))  # / self.d_q)
+def qk_product(q, k, stable_exp=False):
+    matrix = torch.bmm(q, torch.transpose(k, 1, 2))
+    if stable_exp:
+        max_matrix = torch.max(matrix, dim=2).values
+        min_matrix = torch.min(matrix, dim=2).values
+
+        overflow = max_matrix > OVERFLOW_VALUE
+        underflow = min_matrix < UNDERFLOW_VALUE
+
+        if overflow.any() or underflow.any():
+            precision_error = overflow & underflow
+
+            if precision_error.any():
+                warnings.warn('Both overflow and underflow are happening. Consider normalizing the data')
+
+            overflow = overflow.unsqueeze(-1).repeat(1, 1, matrix.size()[2])
+            underflow = underflow.unsqueeze(-1).repeat(1, 1, matrix.size()[2])
+
+            matrix = torch.where(overflow, fix_overflow(matrix), matrix)
+            matrix = torch.where(underflow & ~overflow, fix_underflow(matrix), matrix)
+
+    return torch.exp(matrix)
 
 # Makes a continual step removing the first column and row from M and adding a new column and row defined as:
 # [M a]
