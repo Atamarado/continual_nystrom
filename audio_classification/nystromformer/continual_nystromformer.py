@@ -53,8 +53,8 @@ def _scaled_dot_product_attention_default_state(
     device=None,
 ) -> State:
     init_fn = partial(init_fn, dtype=dtype, device=device)
-    d = embed_dim // num_heads
-    B = batch_size * num_heads
+    d = embed_dim
+    B = batch_size
     n = sequence_len
     m = num_landmarks
 
@@ -196,7 +196,8 @@ def _scaled_dot_product_attention_step(
     dropout_p: float = 0.0,
     use_conv: bool = False,
     update_landmarks: bool = True,
-) -> Tuple[Tensor, State]:
+    return_kernels=False
+): # -> Tuple[Tensor, State]: TODO: Add later
     """
     Computes the Continual Retroactive Scaled Nyströmformer Dot-Product Attention on query, key and value tensors.
     Returns attended values and updated states.
@@ -471,6 +472,17 @@ def _scaled_dot_product_attention_step(
         iteration
     )
 
+    if return_kernels:
+        Beta = qk_product(Q, K_tilde)
+        d_Beta = torch.bmm(Beta, torch.ones((B, m, 1), device=device))
+        Beta_D = odot(d_Beta, Beta)
+
+        Delta = qk_product(Q_tilde, K)
+        d_Delta = torch.bmm(Delta, torch.ones((B, n, 1), device=device))
+        Delta_D = odot(d_Delta, Delta)
+
+        # output = torch.bmm(torch.bmm(Beta_D, Gamma_D), torch.bmm(Delta_D, V))
+        return output, new_states, Beta_D, Gamma_D, Delta_D
     return output, new_states
 
 
@@ -553,6 +565,8 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         sequence_len=None,
         forward_returns_attn_mask=True,
         embed_dim_second=False,
+        init_mem=True,
+        batch_size=32,
         single_output_forward=False,  # TODO: Added to make Retroactive Single Output. Remove later
     ) -> None:
         NystromMultiheadAttention.__init__(
@@ -567,21 +581,32 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             forward_returns_attn_mask,
             single_output_forward
         )
-        self.register_buffer("Q_tilde", torch.tensor([]), persistent=False)
-        self.register_buffer("K_tilde", torch.tensor([]), persistent=False)
-        self.register_buffer("Q", torch.tensor([]), persistent=False)
-        self.register_buffer("K", torch.tensor([]), persistent=False)
-        self.register_buffer("V", torch.tensor([]), persistent=False)
-        self.register_buffer("BetaD_GammaD_mem", torch.tensor([]), persistent=False)
-        self.register_buffer("Gamma_D", torch.tensor([]), persistent=False)
-        self.register_buffer("d_Delta_prev", torch.tensor([]), persistent=False)
-        self.register_buffer("DeltaV_prev", torch.tensor([]), persistent=False)
-        self.register_buffer("d_Beta_prev", torch.tensor([]), persistent=False)
-        self.register_buffer("d_Gamma_prev", torch.tensor([]), persistent=False)
-        self.register_buffer("Beta_mem", torch.tensor([]), persistent=False)
-        self.register_buffer("Gamma_mem", torch.tensor([]), persistent=False)
-        self.register_buffer("state_index", torch.tensor([]), persistent=False)
-        self.register_buffer("iteration", torch.tensor(0), persistent=False)
+
+        self.embed_dim_second = embed_dim_second
+        self.single_output_forward = single_output_forward
+
+        # self.register_buffer("Q_tilde", torch.tensor([]), persistent=False)
+        # self.register_buffer("K_tilde", torch.tensor([]), persistent=False)
+        # self.register_buffer("Q", torch.tensor([]), persistent=False)
+        # self.register_buffer("K", torch.tensor([]), persistent=False)
+        # self.register_buffer("V", torch.tensor([]), persistent=False)
+        # self.register_buffer("BetaD_GammaD_mem", torch.tensor([]), persistent=False)
+        # self.register_buffer("Gamma_D", torch.tensor([]), persistent=False)
+        # self.register_buffer("d_Delta_prev", torch.tensor([]), persistent=False)
+        # self.register_buffer("DeltaV_prev", torch.tensor([]), persistent=False)
+        # self.register_buffer("d_Beta_prev", torch.tensor([]), persistent=False)
+        # self.register_buffer("d_Gamma_prev", torch.tensor([]), persistent=False)
+        # self.register_buffer("Beta_mem", torch.tensor([]), persistent=False)
+        # self.register_buffer("Gamma_mem", torch.tensor([]), persistent=False)
+        # self.register_buffer("state_index", torch.tensor([]), persistent=False)
+        # self.register_buffer("iteration", torch.tensor(0), persistent=False)
+
+        if init_mem:
+            torch.set_default_device(device=device)
+            state = _scaled_dot_product_attention_default_state(batch_size, sequence_len, embed_dim, num_heads, num_landmarks)
+            self.set_state(state)
+            torch.set_default_device(device="cpu")
+
 
     def get_state(self) -> Optional[State]:
         return (
@@ -618,7 +643,7 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             self.Beta_mem,
             self.Gamma_mem,
             self.state_index,
-            self.state_index,
+            self.iteration,
         ) = state
 
     def clean_state(self):
@@ -716,6 +741,9 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         if isinstance(o, Tensor) and self.embed_dim_second:
             o = o.transpose(1, 2)
 
+        if self.single_output_forward:
+            o = o[:, :, -1]
+
         return o
 
     def forward_steps(
@@ -729,16 +757,16 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
     ) -> Optional[Tensor]:
         outs = []
 
-        for i in range(len(query)):
-            query_step = query[i]
+        for i in range(query.size()[2]):
+            query_step = query[:, :, i]
             if key:
-                key_step = key[i]
+                key_step = key[:, :, i]
             else:
-                key_step = query[i]
+                key_step = query[:, :, i]
             if value:
-                value_step = value[i]
+                value_step = value[:, :, i]
             else:
-                value_step = query[i]
+                value_step = query[:, :, i]
 
             o = self.forward_step(query_step, key_step, value_step, update_state, *args, **kwargs)
 
@@ -746,10 +774,10 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
                 outs.append(o)
 
         if outs:
-            o = torch.stack(outs, dim=int(self.batch_first))
+            o = torch.stack(outs, dim=2)
 
-        if isinstance(o, Tensor) and self.embed_dim_second:
-            o = o.permute(0, 3, 1, 2)  # N T T' E -> N E T T'
+        # if isinstance(o, Tensor) and self.embed_dim_second:
+        #     o = o.permute(0, 3, 1, 2)  # N T T' E -> N E T T'
 
         return o
 
