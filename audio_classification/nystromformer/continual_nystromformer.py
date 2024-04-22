@@ -196,7 +196,8 @@ def _scaled_dot_product_attention_step(
     dropout_p: float = 0.0,
     use_conv: bool = False,
     update_landmarks: bool = True,
-    return_kernels=False
+    stable_exp: bool = True,
+    return_kernels: bool = False
 ): # -> Tuple[Tensor, State]: TODO: Add later
     """
     Computes the Continual Retroactive Scaled Nyströmformer Dot-Product Attention on query, key and value tensors.
@@ -318,24 +319,24 @@ def _scaled_dot_product_attention_step(
         )
 
         # Beta update
-        Beta_A = qk_product(Q_mem, k_tilde_new)
-        Beta_B = qk_product(q_new, K_tilde_mem)
-        Beta_C = qk_product(q_new, k_tilde_new)
+        Beta_A = qk_product(Q_mem, k_tilde_new, stable_exp=stable_exp)
+        Beta_B = qk_product(q_new, K_tilde_mem, stable_exp=stable_exp)
+        Beta_C = qk_product(q_new, k_tilde_new, stable_exp=stable_exp)
         Beta = continual_matrix_concat(Beta_mem, Beta_A, Beta_B, Beta_C)
         Beta_mem = Beta[:, 1:, 1:]
 
         # Gamma update
-        Gamma_A = qk_product(Q_tilde_mem, k_tilde_new)
-        Gamma_B = qk_product(q_tilde_new, K_tilde_mem)
-        Gamma_C = qk_product(q_tilde_new, k_tilde_new)
+        Gamma_A = qk_product(Q_tilde_mem, k_tilde_new, stable_exp=stable_exp)
+        Gamma_B = qk_product(q_tilde_new, K_tilde_mem, stable_exp=stable_exp)
+        Gamma_C = qk_product(q_tilde_new, k_tilde_new, stable_exp=stable_exp)
         Gamma = continual_matrix_concat(Gamma_mem, Gamma_A, Gamma_B, Gamma_C)
         Gamma_mem = Gamma[:, 1:, 1:]
 
         # d_Beta update
-        d_Beta = d_Beta_prev - qk_product(Q_mem, k_tilde_old) + qk_product(Q_mem, k_tilde_new)
+        d_Beta = d_Beta_prev - qk_product(Q_mem, k_tilde_old, stable_exp=stable_exp) + Beta_A  # qk_product(Q_mem, k_tilde_new, stable_exp=stable_exp)
         d_Beta_new = torch.cat((
-            qk_product(q_new, K_tilde_mem),
-            qk_product(q_new, k_tilde_new)
+            Beta_B,  # qk_product(q_new, K_tilde_mem),
+            Beta_C  # qk_product(q_new, k_tilde_new)
             ),
             dim=2
         )
@@ -349,10 +350,10 @@ def _scaled_dot_product_attention_step(
         d_Beta_mem = d_Beta[:, 1:]
 
         # Next: d_Gamma update
-        d_Gamma = d_Gamma_prev - qk_product(Q_tilde_mem, k_tilde_old) + qk_product(Q_tilde_mem, k_tilde_new)
+        d_Gamma = d_Gamma_prev - qk_product(Q_tilde_mem, k_tilde_old, stable_exp=stable_exp) + Gamma_A  # qk_product(Q_tilde_mem, k_tilde_new)
         d_Gamma_new = torch.cat((
-            qk_product(q_tilde_new, K_tilde_mem),
-            qk_product(q_tilde_new, k_tilde_new)
+            Gamma_B,  # qk_product(q_tilde_new, K_tilde_mem),
+            Gamma_C,  # qk_product(q_tilde_new, k_tilde_new)
         ),
             dim=2
         )
@@ -366,16 +367,14 @@ def _scaled_dot_product_attention_step(
         d_Gamma_mem = d_Gamma[:, 1:]
 
         # Next: d_Delta update
-        Delta_old = qk_product(Q_tilde_mem, k_old)
-        Delta_new = qk_product(Q_tilde_mem, k_new)
+        Delta_old = qk_product(Q_tilde_mem, k_old, stable_exp=stable_exp)
+        Delta_new = qk_product(Q_tilde_mem, k_new, stable_exp=stable_exp)
 
         d_Delta = d_Delta_prev[:, 1:] - Delta_old + Delta_new
-        d_Delta_new = torch.cat((
-            qk_product(q_tilde_new, K_mem),
-            qk_product(q_tilde_new, k_tilde_new)
-            ),
-            dim=2
-        )
+
+        q_tilde_new_K = qk_product(q_tilde_new, K, stable_exp=stable_exp)
+        d_Delta_new = q_tilde_new_K
+
         d_Delta_new = torch.bmm(d_Delta_new, torch.ones((B, n, 1), device=device))
         d_Delta = torch.cat((
             d_Delta,
@@ -388,7 +387,7 @@ def _scaled_dot_product_attention_step(
         DeltaV_prev = DeltaV_prev[:, 1:]
         DeltaV_prev = DeltaV_prev - torch.bmm(Delta_old, v_old) + torch.bmm(Delta_new, v_new)
 
-        DeltaV_new_row = torch.bmm(qk_product(q_tilde_new, K), V)
+        DeltaV_new_row = torch.bmm(q_tilde_new_K, V)
 
         Delta_V = torch.cat((
             DeltaV_prev,
@@ -411,7 +410,7 @@ def _scaled_dot_product_attention_step(
         d_Gamma_mem = d_Gamma_prev
 
         # Beta^D * Gamma^D computation
-        Beta_new = qk_product(q_new, K_tilde)
+        Beta_new = qk_product(q_new, K_tilde, stable_exp=stable_exp)
         d_Beta_new = torch.bmm(Beta_new, torch.ones((B, m, 1), device=device))
         Beta_D_new = odot(d_Beta_new, Beta_new)
 
@@ -424,8 +423,8 @@ def _scaled_dot_product_attention_step(
         BetaD_GammaD_mem = BetaD_GammaD[:, 1:]
 
         # Delta^D * V computation
-        Delta_old = qk_product(Q_tilde, k_old)
-        Delta_new = qk_product(Q_tilde, k_new)
+        Delta_old = qk_product(Q_tilde, k_old, stable_exp=stable_exp)
+        Delta_new = qk_product(Q_tilde, k_new, stable_exp=stable_exp)
 
         Delta_V = DeltaV_prev - torch.bmm(Delta_old, v_old) + torch.bmm(Delta_new, v_new)
         d_Delta = d_Delta_prev - Delta_old + Delta_new
@@ -473,11 +472,11 @@ def _scaled_dot_product_attention_step(
     )
 
     if return_kernels:
-        Beta = qk_product(Q, K_tilde)
+        Beta = qk_product(Q, K_tilde, stable_exp=stable_exp)
         d_Beta = torch.bmm(Beta, torch.ones((B, m, 1), device=device))
         Beta_D = odot(d_Beta, Beta)
 
-        Delta = qk_product(Q_tilde, K)
+        Delta = qk_product(Q_tilde, K, stable_exp=stable_exp)
         d_Delta = torch.bmm(Delta, torch.ones((B, n, 1), device=device))
         Delta_D = odot(d_Delta, Delta)
 

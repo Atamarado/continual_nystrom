@@ -114,8 +114,9 @@ def _scaled_dot_product_attention(
     m: int,
     attn_mask: Optional[Tensor] = None,
     dropout_p: float = 0.0,
-    use_conv: bool = False
-) -> Tuple[Tensor]:
+    use_conv: bool = False,
+    return_kernels=False
+): # -> Tuple[Tensor]: TODO: Add back later
     r"""
     Computes scaled dot product attention as in Nyströmformer on query, key and value tensors, using
     an optional attention mask if passed, and applying dropout if a probability
@@ -169,7 +170,9 @@ def _scaled_dot_product_attention(
         kernel_3 = torch.nn.functional.softmax(torch.bmm(q_landmarks, k.transpose(-1, -2)), dim=-1)  # - 1e9 * (1 - mask[:, None, None, :]), dim = -1)
         output = torch.bmm(torch.bmm(kernel_1, iterative_inv(kernel_2)), torch.bmm(kernel_3, v))
 
-    return output
+        if return_kernels:
+            return output, kernel_1, iterative_inv(kernel_2), kernel_3
+    return output, None, None, None
 
 class LearnedPositionalEncoding(nn.Module):
     def __init__(self, max_position_embeddings, embedding_dim, seq_length):

@@ -18,23 +18,9 @@ def fix_underflow(tensor: torch.Tensor) -> torch.Tensor:
 def qk_product(q, k, stable_exp=False):
     matrix = torch.bmm(q, torch.transpose(k, 1, 2))
     if stable_exp:
-        max_matrix = torch.max(matrix, dim=2).values
-        min_matrix = torch.min(matrix, dim=2).values
-
-        overflow = max_matrix > OVERFLOW_VALUE
-        underflow = min_matrix < UNDERFLOW_VALUE
-
-        if overflow.any() or underflow.any():
-            precision_error = overflow & underflow
-
-            if precision_error.any():
-                warnings.warn('Both overflow and underflow are happening. Consider normalizing the data')
-
-            overflow = overflow.unsqueeze(-1).repeat(1, 1, matrix.size()[2])
-            underflow = underflow.unsqueeze(-1).repeat(1, 1, matrix.size()[2])
-
-            matrix = torch.where(overflow, fix_overflow(matrix), matrix)
-            matrix = torch.where(underflow & ~overflow, fix_underflow(matrix), matrix)
+        # Based on https://github.com/pytorch/pytorch/blob/34bce27f0d12bf7226b37dfe365660aad456701a/aten/src/ATen/native/SoftMax.cpp#L234
+        max_matrix = torch.max(matrix, dim=-1).values.unsqueeze(-1).repeat(1, 1, matrix.size()[-1])
+        matrix -= max_matrix
 
     return torch.exp(matrix)
 

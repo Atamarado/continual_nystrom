@@ -18,7 +18,7 @@ def compute_diff(pred, target, mode="l2"):
     print("Mean: "+str(torch.mean(diff)))
     print("Max: "+str(torch.max(torch.abs(torch.subtract(pred, target)))))
 
-def nystromformer_exp(q, k, v, m, stable_exp=False, temperature=1.):
+def nystromformer_exp(q, k, v, m, stable_exp=False, state_mode=False):
     device = q.device
     B, Nt, E = q.shape
 
@@ -28,28 +28,53 @@ def nystromformer_exp(q, k, v, m, stable_exp=False, temperature=1.):
     Q_tilde = get_landmarks(q, m)
     K_tilde = get_landmarks(k, m)
 
-    Beta = qk_product(q, K_tilde, stable_exp=stable_exp, temperature=temperature)
+    Beta = qk_product(q, K_tilde, stable_exp=stable_exp)
     d_Beta = torch.bmm(Beta, torch.ones((B, m, 1), device=device))
     Beta_D = odot(d_Beta, Beta)
 
-    Gamma = qk_product(Q_tilde, K_tilde, stable_exp=stable_exp, temperature=temperature)
+    Gamma = qk_product(Q_tilde, K_tilde, stable_exp=stable_exp)
     d_Gamma = torch.bmm(Gamma, torch.ones((B, m, 1), device=device))
     Gamma_D = odot(d_Gamma, Gamma)
     Gamma_D_inv = iterative_inv(Gamma_D)
 
     BetaD_GammaD = torch.bmm(Beta_D, Gamma_D_inv)
 
-    Delta = qk_product(Q_tilde, k, stable_exp=stable_exp, temperature=temperature)
+    Delta = qk_product(Q_tilde, k, stable_exp=stable_exp)
     d_Delta = torch.bmm(Delta, torch.ones((B, Nt, 1), device=device))
 
     DeltaV = torch.bmm(Delta, v)
 
-    Delta_D_V = odot(d_Delta, DeltaV)
-    Delta_D = odot(d_Delta, Delta)
+    if state_mode:
+        state = (
+            Q_tilde,
+            K_tilde,
 
-    output = torch.bmm(BetaD_GammaD, Delta_D_V)
+            q,
+            k,
+            v,
 
-    return output, Beta_D, Gamma_D_inv, Delta_D
+            BetaD_GammaD[:, 1:],
+            Gamma_D_inv,
+            d_Delta,
+            DeltaV,
+
+            d_Beta[:, 1:],
+            d_Gamma[:, 1:],
+            Beta[:, 1:, 1:],
+            Gamma[:, 1:, 1:],
+
+            torch.empty(1),
+            0
+        )
+        return state
+
+    else:
+        Delta_D_V = odot(d_Delta, DeltaV)
+        Delta_D = odot(d_Delta, Delta)
+
+        output = torch.bmm(BetaD_GammaD, Delta_D_V)
+
+        return output, Beta_D, Gamma_D_inv, Delta_D
 
 def compute_landmarks(state: State, q, k, m):
     device = q.device
@@ -166,23 +191,26 @@ def test_scaled_dot_product_attention_step():
     g = torch.Generator()
     g.manual_seed(0)
 
-    query1 = torch.empty((B, N, E)).normal_(mean=0, std=10, generator=g)
-    key1 = torch.empty((B, N, E)).normal_(mean=0, std=10, generator=g)
-    value1 = torch.empty((B, N, E)).normal_(mean=0, std=10, generator=g)
+    std = 13
+
+    query1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
+    key1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
+    value1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
 
     target1, kernel1, kernel2, kernel3 = _scaled_dot_product_attention(query1, key1, value1, m, return_kernels=True)
 
     # Now, let's try from zero-init
     state = _scaled_dot_product_attention_default_state(B, N, E, H, m)
-    #state = compute_landmarks(state, query1, key1, m)
+    state = compute_landmarks(state, query1, key1, m)
+    state = nystromformer_exp(query1, key1, value1, m, stable_exp=True, state_mode=True)
     for i in range(N):
         if i==N-1:
             output_step, state, Beta, Gamma, Delta = _scaled_dot_product_attention_step(
-                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=True, update_landmarks=False
+                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=True, update_landmarks=False, stable_exp=True
             )
         else:
             output_step, state = _scaled_dot_product_attention_step(
-                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=False, update_landmarks=False
+                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=False, update_landmarks=False, stable_exp=True
             )
 
     print("\nDifference Beta: ")
@@ -193,8 +221,8 @@ def test_scaled_dot_product_attention_step():
     compute_diff(kernel3, Delta)
     print("\nDifference outputs: ")
     compute_diff(output_step, target1)
+    pass
 
 if __name__ == '__main__':
     test_stable_exp(seed=0)
-    exit(0)
-    test_scaled_dot_product_attention_step()
+    #test_scaled_dot_product_attention_step()
