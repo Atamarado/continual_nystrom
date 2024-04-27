@@ -14,6 +14,8 @@ def CoNystromTransformerModel(
     num_landmarks,
     dropout_rate=0.1,
     sequence_len=64,
+    batch_size=32,
+    device=None
 ):
     if depth == 1:
         transformer_encoder = RetroactiveNystromTransformerEncoderLayer(
@@ -24,10 +26,12 @@ def CoNystromTransformerModel(
             dropout=dropout_rate,
             activation=nn.GELU(),
             sequence_len=sequence_len,
+            batch_size=batch_size,
+            device=device,
             single_output_forward=True  # TODO: Should be SingleOutput and not retroactive, this is just to make it work
         )
     else:
-        encoder_layer = co.TransformerEncoderLayerFactory(
+        encoder_layer = co.TransformerEncoderLayerFactory( # TODO: Change for Nystrom
             d_model=embed_dim,
             nhead=heads,
             dim_feedforward=mlp_dim,
@@ -141,6 +145,8 @@ def CoNystromVisionTransformer(
     num_layers,
     dropout_rate=0.1,
     continual=True,
+    device=None,
+    batch_size=32
 ):
 
     assert embedding_dim % num_heads == 0
@@ -169,6 +175,8 @@ def CoNystromVisionTransformer(
         sequence_len//10,  # TODO: Find better solution
         dropout_rate,
         sequence_len,
+        device=device,
+        batch_size=batch_size,
     )
     pre_head_ln = co.Lambda(nn.LayerNorm(embedding_dim), takes_time=False)
     mlp_head = co.Linear(embedding_dim, out_dim, channel_dim=1)

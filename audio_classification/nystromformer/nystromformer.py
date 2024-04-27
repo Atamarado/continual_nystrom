@@ -172,7 +172,7 @@ def _scaled_dot_product_attention(
 
         if return_kernels:
             return output, kernel_1, iterative_inv(kernel_2), kernel_3
-    return output, None, None, None
+    return output
 
 class LearnedPositionalEncoding(nn.Module):
     def __init__(self, max_position_embeddings, embedding_dim, seq_length):

@@ -427,6 +427,7 @@ def RetroactiveNystromTransformerEncoderLayer(
     device=None,
     dtype=None,
     sequence_len: int = None,
+    batch_size=32,
     single_output_forward=False,
 ):
     """Continual Retroactive Transformer Encoder layer.
@@ -492,6 +493,7 @@ def RetroactiveNystromTransformerEncoderLayer(
         dtype=dtype,
         sequence_len=sequence_len,
         forward_returns_attn_mask=False,
+        batch_size=batch_size,
         single_output_forward=single_output_forward,
     )
 

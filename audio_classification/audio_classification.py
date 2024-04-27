@@ -496,24 +496,52 @@ def torch_train(config):
     # create and load mode
     match config["model"]:
         case "base":
-            model_class = NonCoVisionTransformer
+            model = NonCoVisionTransformer(
+                sequence_len=SEQ_LEN,
+                input_dim=INPUT_DIM,
+                embedding_dim=192,
+                attn_ff_hidden_dim=192,
+                out_dim=10,
+                num_heads=16,
+                num_layers=config['num_layers'],
+                dropout_rate=0.1,
+            )
         case "base_continual":
-            model_class = CoVisionTransformer
+            model = CoVisionTransformer(
+                sequence_len=SEQ_LEN,
+                input_dim=INPUT_DIM,
+                embedding_dim=192,
+                attn_ff_hidden_dim=192,
+                out_dim=10,
+                num_heads=16,
+                num_layers=config['num_layers'],
+                dropout_rate=0.1,
+            )
         case "nystromformer":
-            model_class = NonCoNystromVisionTransformer
+            model = NonCoNystromVisionTransformer(
+                sequence_len=SEQ_LEN,
+                input_dim=INPUT_DIM,
+                embedding_dim=192,
+                attn_ff_hidden_dim=192,
+                out_dim=10,
+                num_heads=16,
+                num_layers=config['num_layers'],
+                dropout_rate=0.1,
+            )
         case "continual_nystrom":
-            model_class = CoNystromVisionTransformer
+            model = CoNystromVisionTransformer(
+                sequence_len=SEQ_LEN,
+                input_dim=INPUT_DIM,
+                embedding_dim=192,
+                attn_ff_hidden_dim=192,
+                out_dim=10,
+                num_heads=16,
+                num_layers=config['num_layers'],
+                dropout_rate=0.1,
+                batch_size=config['batch_size'],
+                device="cuda:"+str(SELECTED_GPUS[0])
+            )
 
-    model = model_class(
-        sequence_len=SEQ_LEN,
-        input_dim=INPUT_DIM,
-        embedding_dim=192,
-        attn_ff_hidden_dim=192,
-        out_dim=10,
-        num_heads=16,
-        num_layers=config['num_layers'],
-        dropout_rate=0.1,
-    )
     if torch.cuda.device_count() > 1:
         model = nn.DataParallel(model)
     model.cuda()
@@ -578,6 +606,9 @@ def torch_train(config):
 
     # Reload best model for test
     model.load_state_dict(torch.load(get_model_path(config)))
+
+    if config["model"] == "continual_nystrom":
+        model[3].call_mode = "forward_steps"
     test_accuracy = calculate_accuracy(model, test_loader)
 
     return model, train_accuracy, best_val_accuracy, test_accuracy
@@ -616,9 +647,12 @@ def evaluate_config(config, num_seeds=5, filename="results.txt", flops=False, pa
         config["data_seed"] = data_seed
         for model_seed in range(num_seeds):
             config["model_seed"] = model_seed
-            print(config["model"], "model with "+str(config["num_layers"])+". Seed: "+str(config["model_seed"]))
+            print(config["model"], "model with "+str(config["num_layers"])+" layers. Seed: "+str(config["model_seed"]))
             model, train_accuracy, val_accuracy, test_accuracy = torch_train(config)
-            flops, params = get_flops_and_params(model, config)
+            #flops, params = get_flops_and_params(model, config)
+            # TODO: Remove later
+            flops = 0
+            params = 0
             print(test_accuracy, flops, params)
 
             train_accuracies.append(train_accuracy)
@@ -626,7 +660,6 @@ def evaluate_config(config, num_seeds=5, filename="results.txt", flops=False, pa
             test_accuracies.append(test_accuracy)
             flops_list.append(flops)
             params_list.append(params)
-            break  # TODO: One model seed to speed things up. Remove later
 
         with open(filename, 'a') as f:
 
