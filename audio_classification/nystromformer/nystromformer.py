@@ -44,31 +44,39 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
 
         self.dropout = dropout
 
-        self.W_q = nn.Linear(self.sequence_len, self.num_head * self.head_dim)
-        self.W_k = nn.Linear(self.sequence_len, self.num_head * self.head_dim)
-        self.W_v = nn.Linear(self.sequence_len, self.num_head * self.head_dim)
+        self.W_q = nn.Linear(self.embed_dim, self.embed_dim)
+        self.W_k = nn.Linear(self.embed_dim, self.embed_dim)
+        self.W_v = nn.Linear(self.embed_dim, self.embed_dim)
 
-        self.ff = nn.Linear(self.num_head * self.head_dim, self.sequence_len)
+        self.ff = nn.Linear(self.embed_dim, self.embed_dim)
+
+    def prepare_input(self, query, linear):
+        bs, d, n = query.shape
+
+        query = query.permute(0, 2, 1)
+        query = linear(query)
+
+        # (bs, n, d) -> (bs, n, num_head, head_dim) -> (bs, num_head, n, head_dim) -> (bs*num_head, n, head_dim)
+        query = query.view(bs, n, self.num_head, self.head_dim).permute(0, 2, 1, 3).flatten(0, 1)
+
+        return query
 
     def forward(self, query, key=None, value=None):
-        #query, key, value = input
+        bs, d, n = query.shape
 
         if not key:
             key = query
         if not value:
             value = query
 
-        # query = self.split_heads(self.W_q(query))  # TODO: What's going on with the multiple heads?!
-        # key = self.split_heads(self.W_k(key))
-        # value = self.split_heads(self.W_v(value))
-
-        query = self.W_q(query)
-        key = self.W_k(key)
-        value = self.W_v(value)
+        query = self.prepare_input(query, self.W_q)
+        key = self.prepare_input(key, self.W_k)
+        value = self.prepare_input(value, self.W_v)
 
         attn_out = _scaled_dot_product_attention(query, key, value, self.num_landmarks, dropout_p=self.dropout)
 
-        output = self.ff(attn_out)
+        output = attn_out.reshape((bs, n, d))
+        output = self.ff(output).permute(0, 2, 1)
 
         if self.single_output_forward:  # TODO: Remove later
             output = output[:, :, -1].unsqueeze(-1)
@@ -116,7 +124,7 @@ def _scaled_dot_product_attention(
     dropout_p: float = 0.0,
     use_conv: bool = False,
     return_kernels=False
-): # -> Tuple[Tensor]: TODO: Add back later
+) -> Tuple[Tensor]:
     r"""
     Computes scaled dot product attention as in Nyströmformer on query, key and value tensors, using
     an optional attention mask if passed, and applying dropout if a probability

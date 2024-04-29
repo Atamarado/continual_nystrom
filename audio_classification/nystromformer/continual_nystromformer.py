@@ -198,7 +198,7 @@ def _scaled_dot_product_attention_step(
     update_landmarks: bool = True,
     stable_exp: bool = True,
     return_kernels: bool = False
-): # -> Tuple[Tensor, State]: TODO: Add later
+) -> Tuple[Tensor, State]:
     """
     Computes the Continual Retroactive Scaled Nyströmformer Dot-Product Attention on query, key and value tensors.
     Returns attended values and updated states.
