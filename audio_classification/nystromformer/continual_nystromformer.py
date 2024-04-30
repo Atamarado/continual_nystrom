@@ -292,7 +292,7 @@ def _scaled_dot_product_attention_step(
     if update_landmarks and (iteration % tokens_per_landmark == tokens_per_landmark - 1):
         # Landmark changes
         # New landmarks
-        q_tilde_new = Q[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2)
+        q_tilde_new = Q[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2) # TODO: Change landmark update for a method that stacks up the values in State
         k_tilde_new = K[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2)
 
         k_tilde_old = K_tilde[:, 0].unsqueeze(dim=-2)
