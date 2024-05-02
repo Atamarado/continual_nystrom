@@ -38,6 +38,9 @@ State = Tuple[
     Tensor,  # Beta_mem (B, n-1, m-1)
     Tensor,  # Gamma_mem (B, m-1, m-1)
 
+    Tensor,  # q_tilde_new (B, 1, d)
+    Tensor,  # k_tilde_new (B, 1, d)
+
     Tensor,  # state_index
     int,  # iteration
 ]
@@ -75,6 +78,9 @@ def _scaled_dot_product_attention_default_state(
         init_fn(B, m-1, 1),
         init_fn(B, n-1, m-1),
         init_fn(B, m-1, m-1),
+
+        init_fn(B, 1, d),
+        init_fn(B, 1, d),
 
         init_fn(0),
         0
@@ -130,7 +136,6 @@ def _scaled_dot_product_attention(
     if N % m != 0:
         raise ValueError("N must be divisible by m to apply Nyströmformers")
 
-
     device = q.device
 
     Q = torch.div(q, math.sqrt(math.sqrt(E)))
@@ -178,6 +183,9 @@ def _scaled_dot_product_attention(
         d_Gamma[:, 1:],
         Beta[:, 1:, 1:],
         Gamma[:, 1:, 1:],
+
+        torch.zeros((B, 1, E), device=device),
+        torch.zeros((B, 1, E), device=device),
 
         torch.empty(), # TODO: Learn what to do with it
         0
@@ -242,6 +250,9 @@ def _scaled_dot_product_attention_step(
         Beta_mem,
         Gamma_mem,
 
+        q_tilde_new,
+        k_tilde_new,
+
         state_index,  # TODO: Check if it's necessary
         iteration
     ) = prev_state
@@ -289,16 +300,20 @@ def _scaled_dot_product_attention_step(
         dim=1
     )
 
-    if update_landmarks and (iteration % tokens_per_landmark == tokens_per_landmark - 1):
+    if update_landmarks:
+        # Add the contribution of q_new, k_new to the landmarks
+        q_tilde_new += torch.div(q_new, tokens_per_landmark)
+        k_tilde_new += torch.div(k_new, tokens_per_landmark)
+
+    if update_landmarks and (iteration % tokens_per_landmark == 0):
         # Landmark changes
-        # New landmarks
-        q_tilde_new = Q[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2) # TODO: Change landmark update for a method that stacks up the values in State
-        k_tilde_new = K[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2)
+
+        # assert torch.allclose(q_tilde_new, Q[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2))
+        # assert torch.allclose(k_tilde_new, K[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2))
 
         k_tilde_old = K_tilde[:, 0].unsqueeze(dim=-2)
 
         Q_mem = Q[:, :-1]
-        K_mem = K[:, :-1]
 
         Q_tilde_mem = Q_tilde[:, 1:]
         K_tilde_mem = K_tilde[:, 1:]
@@ -405,6 +420,10 @@ def _scaled_dot_product_attention_step(
         BetaD_GammaD = torch.bmm(Beta_D, Gamma_D)
         BetaD_GammaD_mem = BetaD_GammaD[:, 1:]
 
+        # Reset new landmark memory
+        q_tilde_new = torch.zeros((B, 1, d), device=device)
+        k_tilde_new = torch.zeros((B, 1, d), device=device)
+
     else:
         # Same landmarks
         d_Gamma_mem = d_Gamma_prev
@@ -466,6 +485,9 @@ def _scaled_dot_product_attention_step(
         d_Gamma_mem,
         Beta_mem,
         Gamma_mem,
+
+        q_tilde_new,
+        k_tilde_new,
 
         state_index,
         iteration
@@ -607,60 +629,60 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             torch.set_default_device(device="cpu")
 
 
-    def get_state(self) -> Optional[State]:
-        return (
-            self.Q_tilde,
-            self.K_tilde,
-            self.Q,
-            self.K,
-            self.V,
-            self.BetaD_GammaD_mem,
-            self.Gamma_D,
-            self.d_Delta_prev,
-            self.DeltaV_prev,
-            self.d_Beta_prev,
-            self.d_Gamma_prev,
-            self.Beta_mem,
-            self.Gamma_mem,
-            self.state_index,
-            self.iteration,
-        )
-
-    def set_state(self, state: State):
-        (
-            self.Q_tilde,
-            self.K_tilde,
-            self.Q,
-            self.K,
-            self.V,
-            self.BetaD_GammaD_mem,
-            self.Gamma_D,
-            self.d_Delta_prev,
-            self.DeltaV_prev,
-            self.d_Beta_prev,
-            self.d_Gamma_prev,
-            self.Beta_mem,
-            self.Gamma_mem,
-            self.state_index,
-            self.iteration,
-        ) = state
-
-    def clean_state(self):
-        self.Q_tilde = torch.tensor([], device=self.Q_tilde.device)
-        self.K_tilde = torch.tensor([], device=self.K_tilde.device)
-        self.Q = torch.tensor([], device=self.Q.device)
-        self.K = torch.tensor([], device=self.K.device)
-        self.V = torch.tensor([], device=self.V.device)
-        self.BetaD_GammaD_mem = torch.tensor([], device=self.BetaD_GammaD_mem.device)
-        self.Gamma_D = torch.tensor([], device=self.Gamma_D.device)
-        self.d_Delta_prev = torch.tensor([], device=self.d_Delta_prev.device)
-        self.DeltaV_prev = torch.tensor([], device=self.DeltaV_prev.device)
-        self.d_Beta_prev = torch.tensor([], device=self.d_Beta_prev.device)
-        self.d_Gamma_prev = torch.tensor([], device=self.d_Gamma_prev.device)
-        self.Beta_mem = torch.tensor([], device=self.Beta_mem.device)
-        self.Gamma_mem = torch.tensor([], device=self.Gamma_mem.device)
-        self.state_index = torch.tensor([], device=self.state_index.device)
-        self.state_index = torch.tensor(0)
+    # def get_state(self) -> Optional[State]: # TODO: Is necessary to use those?
+    #     return (
+    #         self.Q_tilde,
+    #         self.K_tilde,
+    #         self.Q,
+    #         self.K,
+    #         self.V,
+    #         self.BetaD_GammaD_mem,
+    #         self.Gamma_D,
+    #         self.d_Delta_prev,
+    #         self.DeltaV_prev,
+    #         self.d_Beta_prev,
+    #         self.d_Gamma_prev,
+    #         self.Beta_mem,
+    #         self.Gamma_mem,
+    #         self.state_index,
+    #         self.iteration,
+    #     )
+    #
+    # def set_state(self, state: State):
+    #     (
+    #         self.Q_tilde,
+    #         self.K_tilde,
+    #         self.Q,
+    #         self.K,
+    #         self.V,
+    #         self.BetaD_GammaD_mem,
+    #         self.Gamma_D,
+    #         self.d_Delta_prev,
+    #         self.DeltaV_prev,
+    #         self.d_Beta_prev,
+    #         self.d_Gamma_prev,
+    #         self.Beta_mem,
+    #         self.Gamma_mem,
+    #         self.state_index,
+    #         self.iteration,
+    #     ) = state
+    #
+    # def clean_state(self):
+    #     self.Q_tilde = torch.tensor([], device=self.Q_tilde.device)
+    #     self.K_tilde = torch.tensor([], device=self.K_tilde.device)
+    #     self.Q = torch.tensor([], device=self.Q.device)
+    #     self.K = torch.tensor([], device=self.K.device)
+    #     self.V = torch.tensor([], device=self.V.device)
+    #     self.BetaD_GammaD_mem = torch.tensor([], device=self.BetaD_GammaD_mem.device)
+    #     self.Gamma_D = torch.tensor([], device=self.Gamma_D.device)
+    #     self.d_Delta_prev = torch.tensor([], device=self.d_Delta_prev.device)
+    #     self.DeltaV_prev = torch.tensor([], device=self.DeltaV_prev.device)
+    #     self.d_Beta_prev = torch.tensor([], device=self.d_Beta_prev.device)
+    #     self.d_Gamma_prev = torch.tensor([], device=self.d_Gamma_prev.device)
+    #     self.Beta_mem = torch.tensor([], device=self.Beta_mem.device)
+    #     self.Gamma_mem = torch.tensor([], device=self.Gamma_mem.device)
+    #     self.state_index = torch.tensor([], device=self.state_index.device)
+    #     self.state_index = torch.tensor(0)
 
     # def _forward_step(
     #     self,

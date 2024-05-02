@@ -63,6 +63,9 @@ def nystromformer_exp(q, k, v, m, stable_exp=False, state_mode=False):
             Beta[:, 1:, 1:],
             Gamma[:, 1:, 1:],
 
+            torch.zeros((B, 1, E), device=device),
+            torch.zeros((B, 1, E), device=device),
+
             torch.empty(1),
             0
         )
@@ -97,6 +100,9 @@ def compute_landmarks(state: State, q, k, m):
         Beta_mem,
         _, # Gamma_mem
 
+        q_tilde_new,
+        k_tilde_new,
+
         state_index,
         iteration
     ) = state
@@ -130,6 +136,9 @@ def compute_landmarks(state: State, q, k, m):
         d_Gamma[:, 1:],
         Beta_mem,
         Gamma[:, 1:, 1:],
+
+        q_tilde_new,
+        k_tilde_new,
 
         state_index,
         iteration
@@ -202,7 +211,7 @@ def test_scaled_dot_product_attention_step():
     # Now, let's try from zero-init
     state = _scaled_dot_product_attention_default_state(B, N, E, H, m)
     state = compute_landmarks(state, query1, key1, m)
-    state = nystromformer_exp(query1, key1, value1, m, stable_exp=True, state_mode=True)
+    # state = nystromformer_exp(query1, key1, value1, m, stable_exp=True, state_mode=True)
     for i in range(N):
         if i==N-1:
             output_step, state, Beta, Gamma, Delta = _scaled_dot_product_attention_step(
