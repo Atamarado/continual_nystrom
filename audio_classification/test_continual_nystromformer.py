@@ -66,7 +66,6 @@ def nystromformer_exp(q, k, v, m, stable_exp=False, state_mode=False):
             torch.zeros((B, 1, E), device=device),
             torch.zeros((B, 1, E), device=device),
 
-            torch.empty(1),
             0
         )
         return state
@@ -103,7 +102,6 @@ def compute_landmarks(state: State, q, k, m):
         q_tilde_new,
         k_tilde_new,
 
-        state_index,
         iteration
     ) = state
 
@@ -140,7 +138,6 @@ def compute_landmarks(state: State, q, k, m):
         q_tilde_new,
         k_tilde_new,
 
-        state_index,
         iteration
     )
 
@@ -200,13 +197,14 @@ def test_scaled_dot_product_attention_step():
     g = torch.Generator()
     g.manual_seed(0)
 
-    std = 13
+    std = 5
 
     query1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
     key1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
     value1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
 
     target1, kernel1, kernel2, kernel3 = _scaled_dot_product_attention(query1, key1, value1, m, return_kernels=True)
+    target1, kernel1, kernel2, kernel3 = nystromformer_exp(query1, key1, value1, m, state_mode=False)
 
     # Now, let's try from zero-init
     state = _scaled_dot_product_attention_default_state(B, N, E, H, m)
@@ -233,5 +231,5 @@ def test_scaled_dot_product_attention_step():
     pass
 
 if __name__ == '__main__':
-    test_stable_exp(seed=0)
-    #test_scaled_dot_product_attention_step()
+    # test_stable_exp(seed=0)
+    test_scaled_dot_product_attention_step()

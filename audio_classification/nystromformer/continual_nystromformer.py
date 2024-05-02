@@ -41,7 +41,6 @@ State = Tuple[
     Tensor,  # q_tilde_new (B, 1, d)
     Tensor,  # k_tilde_new (B, 1, d)
 
-    Tensor,  # state_index
     int,  # iteration
 ]
 
@@ -82,7 +81,6 @@ def _scaled_dot_product_attention_default_state(
         init_fn(B, 1, d),
         init_fn(B, 1, d),
 
-        init_fn(0),
         0
     )
     return default_state
@@ -187,7 +185,6 @@ def _scaled_dot_product_attention(
         torch.zeros((B, 1, E), device=device),
         torch.zeros((B, 1, E), device=device),
 
-        torch.empty(), # TODO: Learn what to do with it
         0
     )
 
@@ -253,7 +250,6 @@ def _scaled_dot_product_attention_step(
         q_tilde_new,
         k_tilde_new,
 
-        state_index,  # TODO: Check if it's necessary
         iteration
     ) = prev_state
 
@@ -489,7 +485,6 @@ def _scaled_dot_product_attention_step(
         q_tilde_new,
         k_tilde_new,
 
-        state_index,
         iteration
     )
 
