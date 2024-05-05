@@ -1,6 +1,6 @@
 from torch import nn
 from .Attention import SelfAttention
-from continual_transformers import CoSiTransformerEncoder, CoReSiTransformerEncoder
+import continual as co
 
 
 class Residual(nn.Module):
@@ -93,32 +93,31 @@ def CoTransformerModel(
     assert depth in {1, 2}
 
     if depth == 1:
-        return CoSiTransformerEncoder(
+        return co.SingleOutputTransformerEncoderLayer(
             sequence_len=sequence_len,
-            embed_dim=dim,
-            num_heads=heads,
+            d_model=dim,
+            nhead=heads,
             dropout=dropout_rate,
-            in_proj_bias=False,
             query_index=-1,
-            ff_hidden_dim=mlp_dim,
-            ff_activation=nn.GELU(),
+            dim_feedforward=mlp_dim,
+            activation=nn.GELU(),
             device=None,
             dtype=None,
+            single_output_forward=True
         )
 
     # depth == 2
-    return CoReSiTransformerEncoder(
+    layer_factory = co.TransformerEncoderLayerFactory(
         sequence_len=sequence_len,
-        embed_dim=dim,
-        num_heads=heads,
+        d_model=dim,
+        nhead=heads,
         dropout=dropout_rate,
-        in_proj_bias=False,
-        query_index=-1,
-        ff_hidden_dim=mlp_dim,
-        ff_activation=nn.GELU(),
+        dim_feedforward=mlp_dim,
+        activation=nn.GELU(),
         device=None,
         dtype=None,
     )
+    return co.TransformerEncoder(layer_factory, num_layers=depth)
 
 
 def _register_ptflops():

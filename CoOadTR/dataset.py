@@ -1,6 +1,6 @@
 from os import minor
 import os.path as osp
-import pickle5 as pickle
+import pickle # TODO: check if 'import pickle5 as pickle' is needed
 import torch
 import torch.utils.data as data
 import numpy as np
@@ -195,17 +195,19 @@ class TRNTHUMOSDataLayer(data.Dataset):
                         ]
                     )
 
-        file_prefix = "thumos_"
+        folder_name = "thumos_"
         if "kin" in self.feature_pretrain:
-            file_prefix += "kin_"
+            folder_name += "kin"
+            version_features = "V3"
         else:
-            assert "anet" in self.feature_pretrain
-            file_prefix += "anet_"
+            assert "Anet" in self.feature_pretrain
+            folder_name += "anet"
+            version_features = "tsn_v2"
 
         if self.with_audio:
-            file_prefix += "plus_audio_"
+            folder_name += "_plus_audio_"
 
-        file_path = osp.join(self.pickle_root, f"{file_prefix}{self.subnet}.pickle")
+        file_path = f"data/{folder_name}/thumos_all_feature_{self.subnet}_{version_features}.pickle"
         assert osp.exists(file_path)
         self.feature_All = pickle.load(open(file_path, "rb"))
         print(f"Loaded {file_path}")

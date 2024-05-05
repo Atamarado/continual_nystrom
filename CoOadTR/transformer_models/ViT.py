@@ -8,7 +8,7 @@ from .PositionalEncoding import (
     LearnedPositionalEncoding,
 )
 import continual as co
-from continual_transformers import RecyclingPositionalEncoding
+from continual import RecyclingPositionalEncoding
 
 __all__ = ["ViT_B16", "ViT_B32", "ViT_L16", "ViT_L32", "ViT_H14"]
 
