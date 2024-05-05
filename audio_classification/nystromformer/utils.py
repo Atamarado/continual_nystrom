@@ -6,21 +6,14 @@ import warnings
 OVERFLOW_VALUE = 80.
 UNDERFLOW_VALUE = -95.
 
-def fix_overflow(tensor: torch.Tensor) -> torch.Tensor:
-    diff = torch.max(tensor) - OVERFLOW_VALUE
-    return tensor - diff
-
-def fix_underflow(tensor: torch.Tensor) -> torch.Tensor:
-    diff = torch.min(tensor) + UNDERFLOW_VALUE
-    return tensor + diff
-
 # Generic qk_product
-def qk_product(q, k, stable_exp=False):
+def qk_product(q, k, stable_exp=False, maximum=None):
     matrix = torch.bmm(q, torch.transpose(k, 1, 2))
     if stable_exp:
         # Based on https://github.com/pytorch/pytorch/blob/34bce27f0d12bf7226b37dfe365660aad456701a/aten/src/ATen/native/SoftMax.cpp#L234
-        max_matrix = torch.max(matrix, dim=-1).values.unsqueeze(-1).repeat(1, 1, matrix.size()[-1])
-        matrix -= max_matrix
+        if maximum is None:
+            maximum = torch.max(matrix, dim=-1).values.unsqueeze(-1).repeat(1, 1, matrix.size()[-1])
+        matrix -= maximum
 
     return torch.exp(matrix)
 
