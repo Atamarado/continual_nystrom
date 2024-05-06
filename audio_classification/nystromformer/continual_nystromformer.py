@@ -332,26 +332,19 @@ def _scaled_dot_product_attention_step(
 
         # Beta update
         Beta_A = qk_product(Q_mem, k_tilde_new, stable_exp=stable_exp, maximum=maximum_exp)
-        Beta_B = qk_product(q_new, K_tilde_mem, stable_exp=stable_exp, maximum=maximum_exp)
-        Beta_C = qk_product(q_new, k_tilde_new, stable_exp=stable_exp, maximum=maximum_exp)
-        Beta = continual_matrix_concat(Beta_mem, Beta_A, Beta_B, Beta_C)
+        Beta_B = qk_product(q_new, K_tilde, stable_exp=stable_exp, maximum=maximum_exp)
+        Beta = continual_matrix_concat(Beta_mem, Beta_A, Beta_B)
         Beta_mem = Beta[:, 1:, 1:]
 
         # Gamma update
         Gamma_A = qk_product(Q_tilde_mem, k_tilde_new, stable_exp=stable_exp, maximum=maximum_exp)
-        Gamma_B = qk_product(q_tilde_new, K_tilde_mem, stable_exp=stable_exp, maximum=maximum_exp)
-        Gamma_C = qk_product(q_tilde_new, k_tilde_new, stable_exp=stable_exp, maximum=maximum_exp)
-        Gamma = continual_matrix_concat(Gamma_mem, Gamma_A, Gamma_B, Gamma_C)
+        Gamma_B = qk_product(q_tilde_new, K_tilde, stable_exp=stable_exp, maximum=maximum_exp)
+        Gamma = continual_matrix_concat(Gamma_mem, Gamma_A, Gamma_B)
         Gamma_mem = Gamma[:, 1:, 1:]
 
         # d_Beta update
         d_Beta = d_Beta_prev - qk_product(Q_mem, k_tilde_old, stable_exp=stable_exp, maximum=maximum_exp) + Beta_A  # qk_product(Q_mem, k_tilde_new, stable_exp=stable_exp, maximum=maximum_exp)
-        d_Beta_new = torch.cat((
-            Beta_B,  # qk_product(q_new, K_tilde_mem),
-            Beta_C  # qk_product(q_new, k_tilde_new)
-            ),
-            dim=2
-        )
+        d_Beta_new = Beta_B
         d_Beta_new = torch.bmm(d_Beta_new, torch.ones((B, m, 1), device=device))
         d_Beta = torch.cat((
             d_Beta,
@@ -363,12 +356,7 @@ def _scaled_dot_product_attention_step(
 
         # Next: d_Gamma update
         d_Gamma = d_Gamma_prev - qk_product(Q_tilde_mem, k_tilde_old, stable_exp=stable_exp, maximum=maximum_exp) + Gamma_A  # qk_product(Q_tilde_mem, k_tilde_new)
-        d_Gamma_new = torch.cat((
-            Gamma_B,  # qk_product(q_tilde_new, K_tilde_mem),
-            Gamma_C,  # qk_product(q_tilde_new, k_tilde_new)
-        ),
-            dim=2
-        )
+        d_Gamma_new = Gamma_B
         d_Gamma_new = torch.bmm(d_Gamma_new, torch.ones((B, m, 1), device=device))
         d_Gamma = torch.cat((
             d_Gamma,

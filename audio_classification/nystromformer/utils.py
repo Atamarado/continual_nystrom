@@ -20,7 +20,7 @@ def qk_product(q, k, stable_exp=False, maximum=None):
 # Makes a continual step removing the first column and row from M and adding a new column and row defined as:
 # [M a]
 # [b c]
-def continual_matrix_concat(M, a, b, c):
+def continual_matrix_concat(M, a, b):
     return torch.cat((
             torch.cat((
                 M,
@@ -28,12 +28,7 @@ def continual_matrix_concat(M, a, b, c):
                 ),
                 dim=2
             ),
-            torch.cat((
-                b,
-                c
-                ),
-                dim=2
-            )
+            b
         ),
         dim=1
     )
