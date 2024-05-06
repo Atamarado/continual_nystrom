@@ -200,7 +200,7 @@ class TRNTHUMOSDataLayer(data.Dataset):
             folder_name += "kin"
             version_features = "V3"
         else:
-            assert "Anet" in self.feature_pretrain
+            assert "anet" in self.feature_pretrain
             folder_name += "anet"
             version_features = "tsn_v2"
 
