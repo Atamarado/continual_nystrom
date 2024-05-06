@@ -217,11 +217,11 @@ def test_scaled_dot_product_attention_step():
     for i in range(N):
         if i==N-1:
             output_step, state, Beta, Gamma, Delta = _scaled_dot_product_attention_step(
-                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=True, update_landmarks=True, stable_exp=True, maximum_exp=maximum_exp
+                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=True, update_landmarks=True, stable_exp=True, maximum_exp=maximum_exp, single_output=True
             )
         else:
             output_step, state = _scaled_dot_product_attention_step(
-                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=False, update_landmarks=True, stable_exp=True, maximum_exp=maximum_exp
+                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=False, update_landmarks=True, stable_exp=True, maximum_exp=maximum_exp, single_output=True
             )
 
     print("\n\nStd, "+str(std))
@@ -232,7 +232,7 @@ def test_scaled_dot_product_attention_step():
     print("\nDifference Delta: ")
     compute_diff(Delta, kernel3)
     print("\nDifference outputs: ")
-    compute_diff(output_step, target1)
+    compute_diff(output_step, target1[:, -1].unsqueeze(1))
     pass
 
 if __name__ == '__main__':
