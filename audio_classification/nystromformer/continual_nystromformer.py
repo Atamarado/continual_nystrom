@@ -511,7 +511,7 @@ def _scaled_dot_product_attention_step(
 
 class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
     """
-    MultiHeadAttention with retroactively updated attention outputs during continual inference.
+    MultiHeadAttention with retroactively or single output updated attention outputs during continual inference.
 
     Continual MHAs were proposed by Hedegaard et al. in
     "Continual Transformers: Redundancy-Free Attention for Online Inference"
@@ -590,8 +590,12 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         embed_dim_second=False,
         init_mem=True,
         batch_size=32,
-        single_output_forward=False,  # TODO: Added to make Retroactive Single Output. Remove later
+        single_output_mode=False,
+        single_output_forward=False,
+        query_index=None
     ) -> None:
+        assert single_output_mode >= single_output_forward # single_output_forward can only be True when single_output_mode is
+
         NystromMultiheadAttention.__init__(
             self,
             sequence_len,
@@ -606,13 +610,32 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         )
 
         self.embed_dim_second = embed_dim_second
+        self.single_output_mode = single_output_mode
         self.single_output_forward = single_output_forward
+        self.query_index = query_index
 
         if init_mem:
             torch.set_default_device(device=device)
             state = _scaled_dot_product_attention_default_state(batch_size, sequence_len, embed_dim, num_heads, num_landmarks)
             self.set_state(state)
             torch.set_default_device(device="cpu")
+
+    def forward(self, query, key=None, value=None):
+        if not self.single_output_forward or not self.single_output_mode:
+            return NystromMultiheadAttention.forward(
+                self, query, key, value
+            )
+
+        if key is None:
+            key = query
+        if value is None:
+            value = query
+
+        o = NystromMultiheadAttention.forward(
+            self, query, key, value, single_output_forward=True
+        )
+
+        return o
 
     def forward_step(
         self,
@@ -644,7 +667,7 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             value = query
 
         o, new_state = _scaled_dot_product_attention_step(
-            self.get_state(), query, key, value
+            self.get_state(), query, key, value, single_output=self.single_output_mode
         )
 
         if update_state:
@@ -652,9 +675,6 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
 
         if isinstance(o, Tensor) and self.embed_dim_second:
             o = o.transpose(1, 2)
-
-        if self.single_output_forward:
-            o = o[:, :, -1]
 
         return o
 
