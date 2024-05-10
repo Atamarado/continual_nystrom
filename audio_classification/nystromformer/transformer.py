@@ -842,6 +842,7 @@ def NystromTransformerEncoderLayerFactory(
         return factory_fn(
             d_model,
             nhead,
+            num_landmarks,
             dim_feedforward,
             dropout,
             activation,
@@ -851,7 +852,6 @@ def NystromTransformerEncoderLayerFactory(
             device,
             dtype,
             sequence_len,
-            num_landmarks=num_landmarks,
             batch_size=batch_size
         )
 

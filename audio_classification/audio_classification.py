@@ -752,17 +752,17 @@ if __name__ == "__main__":
         'num_layers': 1,
         'model': 'nystromformer'
     }
-    evaluate_config(torch_config, filename="results_conystrom.txt")
+    # evaluate_config(torch_config, filename="results_conystrom3.txt")
 
     torch_config["num_layers"] = 2
-    evaluate_config(torch_config, filename="results_conystrom.txt")
+    evaluate_config(torch_config, filename="results_conystrom3.txt")
 
     torch_config["num_layers"] = 1
     torch_config["model"] = "continual_nystrom"
-    evaluate_config(torch_config, filename="results_conystrom.txt")
+    evaluate_config(torch_config, filename="results_conystrom3.txt")
 
     torch_config["num_layers"] = 2
-    evaluate_config(torch_config, filename="results_conystrom.txt")
+    evaluate_config(torch_config, filename="results_conystrom3.txt")
 
         # torch_config = {
         #     'batch_size': 32,
