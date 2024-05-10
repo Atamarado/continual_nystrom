@@ -18,7 +18,7 @@ def compute_diff(pred, target, mode="l2"):
     print("Mean: "+str(torch.mean(diff)))
     print("Max: "+str(torch.max(torch.abs(torch.subtract(pred, target)))))
 
-def nystromformer_exp(q, k, v, m, stable_exp=False, state_mode=False):
+def nystromformer_exp(q, k, v, m, stable_exp=None, state_mode=False):
     device = q.device
     B, Nt, E = q.shape
 
