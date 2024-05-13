@@ -527,6 +527,7 @@ def torch_train(config):
                 num_heads=16,
                 num_layers=config['num_layers'],
                 dropout_rate=0.1,
+                num_landmarks=config['num_landmarks']
             )
         case "continual_nystrom":
             model = CoNystromVisionTransformer(
@@ -539,7 +540,8 @@ def torch_train(config):
                 num_layers=config['num_layers'],
                 dropout_rate=0.1,
                 batch_size=config['batch_size'],
-                device="cuda:"+str(SELECTED_GPUS[0])
+                device="cuda:"+str(SELECTED_GPUS[0]),
+                num_landmarks=config['num_landmarks']
             )
 
     if torch.cuda.device_count() > 1:

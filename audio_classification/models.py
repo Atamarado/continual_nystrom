@@ -33,7 +33,7 @@ def CoNystromTransformerModel(
             single_output_forward=True
         )
     else:
-        encoder_layer = NystromTransformerEncoderLayerFactory( # TODO: Change for Nystrom
+        encoder_layer = NystromTransformerEncoderLayerFactory(
             d_model=embed_dim,
             nhead=heads,
             num_landmarks=num_landmarks,
@@ -127,7 +127,8 @@ def NonCoNystromVisionTransformer( # TODO: Temporary solution. Fix later
         out_dim,
         num_heads,
         num_layers,
-        dropout_rate=0.1
+        dropout_rate=0.1,
+        num_landmarks=10
 ):
     return CoNystromVisionTransformer(
         sequence_len,
@@ -137,6 +138,7 @@ def NonCoNystromVisionTransformer( # TODO: Temporary solution. Fix later
         out_dim,
         num_heads,
         num_layers,
+        num_landmarks=num_landmarks,
         dropout_rate=dropout_rate,
         continual=False,
     )
@@ -152,7 +154,8 @@ def CoNystromVisionTransformer(
     dropout_rate=0.1,
     continual=True,
     device=None,
-    batch_size=32
+    batch_size=32,
+    num_landmarks=10
 ):
 
     assert embedding_dim % num_heads == 0
@@ -178,7 +181,7 @@ def CoNystromVisionTransformer(
         num_layers,
         num_heads,
         attn_ff_hidden_dim,
-        sequence_len//10,  # TODO: Find better solution
+        num_landmarks,
         dropout_rate,
         sequence_len,
         device=device,
