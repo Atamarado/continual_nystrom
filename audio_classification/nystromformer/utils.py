@@ -6,28 +6,24 @@ import warnings
 OVERFLOW_VALUE = 80.
 UNDERFLOW_VALUE = -95.
 
-def fix_overflow(tensor: torch.Tensor) -> torch.Tensor:
-    diff = torch.max(tensor) - OVERFLOW_VALUE
-    return tensor - diff
-
-def fix_underflow(tensor: torch.Tensor) -> torch.Tensor:
-    diff = torch.min(tensor) + UNDERFLOW_VALUE
-    return tensor + diff
-
 # Generic qk_product
-def qk_product(q, k, stable_exp=False):
+def qk_product(q, k, stable_exp=None):
     matrix = torch.bmm(q, torch.transpose(k, 1, 2))
-    if stable_exp:
+    if stable_exp is not None:
         # Based on https://github.com/pytorch/pytorch/blob/34bce27f0d12bf7226b37dfe365660aad456701a/aten/src/ATen/native/SoftMax.cpp#L234
-        max_matrix = torch.max(matrix, dim=-1).values.unsqueeze(-1).repeat(1, 1, matrix.size()[-1])
-        matrix -= max_matrix
+        matrix -= stable_exp
 
-    return torch.exp(matrix)
+    matrix = torch.exp(matrix)
+    if torch.any(torch.isinf(matrix)):
+        warnings.warn("qk product produces overflow infinite after exponential")
+    elif torch.all(matrix == 0):
+        warnings.warn("qk product produces underflow zeros after exponential")
+    return matrix
 
 # Makes a continual step removing the first column and row from M and adding a new column and row defined as:
 # [M a]
 # [b c]
-def continual_matrix_concat(M, a, b, c):
+def continual_matrix_concat(M, a, b):
     return torch.cat((
             torch.cat((
                 M,
@@ -35,12 +31,7 @@ def continual_matrix_concat(M, a, b, c):
                 ),
                 dim=2
             ),
-            torch.cat((
-                b,
-                c
-                ),
-                dim=2
-            )
+            b
         ),
         dim=1
     )

@@ -61,25 +61,24 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
 
         return query
 
-    def forward(self, query, key=None, value=None):
+    def forward(self, query, key=None, value=None, single_output_forward=False):
         bs, d, n = query.shape
 
-        if not key:
+        if key is None:
             key = query
-        if not value:
+        if value is None:
             value = query
 
         query = self.prepare_input(query, self.W_q)
         key = self.prepare_input(key, self.W_k)
         value = self.prepare_input(value, self.W_v)
 
-        attn_out = _scaled_dot_product_attention(query, key, value, self.num_landmarks, dropout_p=self.dropout)
+        attn_out = _scaled_dot_product_attention(query, key, value, self.num_landmarks, dropout_p=self.dropout, single_output_forward=single_output_forward)
 
+        if single_output_forward:
+            n = 1
         output = attn_out.reshape((bs, n, d))
         output = self.ff(output).permute(0, 2, 1)
-
-        if self.single_output_forward:  # TODO: Remove later
-            output = output[:, :, -1].unsqueeze(-1)
 
         return output
 
@@ -123,7 +122,8 @@ def _scaled_dot_product_attention(
     attn_mask: Optional[Tensor] = None,
     dropout_p: float = 0.0,
     use_conv: bool = False,
-    return_kernels=False
+    return_kernels=False,
+    single_output_forward=False,
 ) -> Tuple[Tensor]:
     r"""
     Computes scaled dot product attention as in Nyströmformer on query, key and value tensors, using
@@ -172,6 +172,9 @@ def _scaled_dot_product_attention(
     else:
         q_landmarks = get_landmarks(q, m)
         k_landmarks = get_landmarks(k, m)
+
+        if single_output_forward:
+            q = q[:, -1].unsqueeze(1)
 
         kernel_1 = torch.nn.functional.softmax(torch.bmm(q, k_landmarks.transpose(-1, -2)), dim=-1)
         kernel_2 = torch.nn.functional.softmax(torch.bmm(q_landmarks, k_landmarks.transpose(-1, -2)), dim=-1)

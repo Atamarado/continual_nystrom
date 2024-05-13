@@ -414,6 +414,152 @@ def RetroactiveTransformerEncoderLayer(
         ),
     )
 
+def SingleOutputNystromTransformerEncoderLayer(
+    d_model: int,
+    nhead: int,
+    num_landmarks: int,
+    dim_feedforward: int = 2048,
+    dropout: float = 0.1,
+    activation: Union[nn.Module, Callable[[Tensor], Tensor]] = nn.functional.relu,
+    layer_norm_eps: float = 1e-5,
+    # batch_first: bool = True,
+    # norm_first: bool = False,
+    device=None,
+    dtype=None,
+    sequence_len: int = None,
+    single_output_forward=False,
+    query_index: int = -1,
+    batch_size=32
+):
+    """Continual Single-output Transformer Encoder layer.
+
+    Contrary to the ``torch.nn.TransformerEncoderLayer``, this layer only computes the attention
+    for the last query during ``forward_step``. The behavior during ``forward`` is controllable
+    with the ``single_output_forward`` parameter.
+
+    The continual formulation of the Transformer Encoder Layer was proposed by Hedegaard et al.
+    in "Continual Transformers: Redundancy-Free Attention for Online Inference".
+    https://arxiv.org/abs/2201.06268 (paper) https://www.youtube.com/watch?v=gy802Tlp-eQ (video).
+
+    .. note::
+        In order to handle positional encoding correctly for continual input streams, the
+        :class:`RecyclingPositionalEncoding` should be used together with this module.
+
+    Args:
+        d_model: the number of expected features in the input (required).
+        nhead: the number of heads in the multiheadattention models (required).
+        dim_feedforward: the dimension of the feedforward network model (default=2048).
+        dropout: the dropout value (default=0.1).
+        activation: the activation function of the intermediate layer, can be a string
+            ("relu" or "gelu") or a unary callable. Default: relu.
+        layer_norm_eps: the eps value in layer normalization components (default=1e-5).
+        device: torch device to initialize layer on. Defaults to None.
+        dtype: datatype of layer parameters. Defaults to None.
+        sequence_len: length of token-sequence to perform attention across. Defaults to None.
+        single_output_forward: whether to restrict the attention to the last token during forward. Defaults to False.
+        query_index: the sequence position index to compute the attention for.
+
+    Examples::
+
+        encoder_layer = co.SingleOutputTransformerEncoderLayer(
+            d_model=512, nhead=8, sequence_len=32, dropout=0.0
+        )
+        x = torch.rand(10, 512, 32)  # (N, E, T)
+
+        # corresponds to torch.nn.TransformerEncoderLayer
+        out = encoder_layer.forward(x)
+
+        # continual inference API
+        firsts = encoder_layer.forward_steps(x[:,:,:-1])
+        last = encoder_layer.forward_step(x[:,:,-1])
+
+        assert firsts is None  # The module first needs to observe ``sequence_len`` values
+        assert torch.allclose(out[:,:,-1], last, atol=1e-6)
+
+    """
+    assert (
+        sequence_len > 0
+    ), "Please provide a positive integer value as sequence length."
+
+    factory_kwargs = {"device": device, "dtype": dtype}
+    norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps, **factory_kwargs)
+    norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps, **factory_kwargs)
+
+    mha = ContinualNystromMultiheadAttention(
+        embed_dim=d_model,
+        num_heads=nhead,
+        num_landmarks=num_landmarks,
+        dropout=dropout,
+        bias=True,
+        batch_first=True,
+        embed_dim_second=True,
+        device=device,
+        dtype=dtype,
+        sequence_len=sequence_len,
+        forward_returns_attn_mask=False,
+        batch_size=batch_size,
+        single_output_mode=True,
+        single_output_forward=single_output_forward,
+        query_index=query_index
+    )
+
+    ff = Sequential(
+        OrderedDict(
+            [
+                (
+                    "linear1",
+                    Linear(d_model, dim_feedforward, channel_dim=1, **factory_kwargs),
+                ),
+                (
+                    "activation",
+                    activation,
+                ),
+                (
+                    "dropout",
+                    nn.Dropout(dropout),
+                ),
+                (
+                    "linear2",
+                    Linear(dim_feedforward, d_model, channel_dim=1, **factory_kwargs),
+                ),
+                (
+                    "dropout2",
+                    nn.Dropout(dropout),
+                ),
+            ]
+        )
+    )
+
+    return Sequential(
+        BroadcastReduce(
+            OrderedDict(
+                [
+                    (
+                        "residual",
+                        SelectOrDelay(mha.delay)
+                        if single_output_forward
+                        else Identity(),
+                    ),
+                    (
+                        "self_attn",
+                        mha,
+                    ),
+                ]
+            ),
+            reduce=sum_last_pairs,
+            auto_delay=False,
+        ),
+        Sequential(
+            OrderedDict(
+                [
+                    ("norm1", Lambda(norm1, takes_time=False)),
+                    ("_ff_block", Residual(ff)),
+                    ("norm2", Lambda(norm2, takes_time=False)),
+                ]
+            )
+        ),
+    )
+
 def RetroactiveNystromTransformerEncoderLayer(
     d_model: int,
     nhead: int,
@@ -427,8 +573,7 @@ def RetroactiveNystromTransformerEncoderLayer(
     device=None,
     dtype=None,
     sequence_len: int = None,
-    batch_size=32,
-    single_output_forward=False,
+    batch_size=32
 ):
     """Continual Retroactive Transformer Encoder layer.
 
@@ -494,7 +639,8 @@ def RetroactiveNystromTransformerEncoderLayer(
         sequence_len=sequence_len,
         forward_returns_attn_mask=False,
         batch_size=batch_size,
-        single_output_forward=single_output_forward,
+        single_output_mode=False,
+        single_output_forward=False,
     )
 
     ff = Sequential(
@@ -513,11 +659,7 @@ def RetroactiveNystromTransformerEncoderLayer(
         BroadcastReduce(
             OrderedDict(
                 [
-                    (
-                        "residual",
-                        SelectOrDelay(mha.delay) if single_output_forward
-                        else RetroactiveUnity(mha.delay)  # TODO: Changed to match SingleOutput. Change back to retroactive later
-                    ),
+                    ("residual", RetroactiveUnity(mha.delay)),
                     ("self_attn", mha),
                 ]
             ),
@@ -615,10 +757,6 @@ def TransformerEncoderLayerFactory(
                 SingleOutputTransformerEncoderLayer, single_output_forward=True
             ),
             MhaType.REGULAR: StepLocalTransformerEncoderLayer,
-            MhaType.RETROACTIVE_NYSTROM: RetroactiveNystromTransformerEncoderLayer,
-            MhaType.SINGLE_OUTPUT_NYSTROM: RetroactiveNystromTransformerEncoderLayer,  # TODO: Change to Single Output when implemented
-            MhaType.SINGLE_OUTPUT_FORWARD_NYSTROM: RetroactiveNystromTransformerEncoderLayer,
-            MhaType.NYSTROMFORMER: None,
         }[MhaType(mha_type)]
 
         return factory_fn(
@@ -637,7 +775,89 @@ def TransformerEncoderLayerFactory(
 
     return TransformerEncoderLayer
 
-class RetroactiveNystromTransformerEncoder(Sequential):
+def NystromTransformerEncoderLayerFactory(
+    d_model: int,
+    nhead: int,
+    num_landmarks: int,
+    dim_feedforward: int = 2048,
+    dropout: float = 0.1,
+    activation: Union[nn.Module, Callable[[Tensor], Tensor], str] = nn.functional.relu,
+    layer_norm_eps: float = 1e-5,
+    # batch_first: bool = True,
+    # norm_first: bool = False,
+    device=None,
+    dtype=None,
+    sequence_len: int = None,
+    batch_size: int = 32,
+) -> Callable[[MhaType], Sequential]:
+    """Defines the hyper-parameters of Continual Transformer Encoder layers, where each layer
+    contains feed forward networks and continual multi-head attentions as proposed by
+    Vaswani et al. in "Attention is all you need".
+
+    It can produce either a :class:`SingleOutputTransformerEncoderLayer` or a
+    :class:`RetroactiveTransformerEncoderLayer`.
+    These were proposed by Hedegaard et al. in
+    "Continual Transformers: Redundancy-Free Attention for Online Inference".
+    https://arxiv.org/abs/2201.06268 (paper) https://www.youtube.com/watch?v=gy802Tlp-eQ (video).
+
+    Args:
+        d_model: the number of expected features in the input (required).
+        nhead: the number of heads in the multiheadattention models (required).
+        dim_feedforward: the dimension of the feedforward network model (default=2048).
+        dropout: the dropout value (default=0.1).
+        activation: the activation function of the intermediate layer, can be a string
+            ("relu" or "gelu") or a unary callable. Default: relu.
+        layer_norm_eps: the eps value in layer normalization components (default=1e-5).
+        device: torch device to initialize layer on. Defaults to None.
+        dtype: datatype of layer parameters. Defaults to None.
+        sequence_len: length of token-sequence to perform attention across. Defaults to None.
+
+    Returns:
+        Callable[[Union[str,MhaType]], Sequential]: Factory function return the layer module given
+            the desired MHA type (one of "retroactive", "single_output", "single_output_forward", and "regular").
+
+    Examples::
+
+        encoder_layer = co.TransformerEncoderLayerFactory(d_model=512, nhead=8, sequence_len=32)
+        transformer_encoder = co.TransformerEncoder(encoder_layer, num_layers=2)
+        src = torch.rand(10, 512, 32)
+        out = transformer_encoder(src)
+    """
+    if activation in {"relu", "gelu"}:
+        activation = {
+            "relu": nn.functional.relu,
+            "gelu": nn.functional.relu,
+        }[activation]
+
+    def TransformerEncoderLayer(mha_type: MhaType):
+        factory_fn = {
+            MhaType.RETROACTIVE_NYSTROM: RetroactiveNystromTransformerEncoderLayer,
+            MhaType.SINGLE_OUTPUT_NYSTROM: SingleOutputNystromTransformerEncoderLayer,
+            MhaType.SINGLE_OUTPUT_FORWARD_NYSTROM: partial(
+                SingleOutputNystromTransformerEncoderLayer, single_output_forward=True
+            ),
+            MhaType.NYSTROMFORMER: None,
+        }[MhaType(mha_type)]
+
+        return factory_fn(
+            d_model,
+            nhead,
+            num_landmarks,
+            dim_feedforward,
+            dropout,
+            activation,
+            layer_norm_eps,
+            # batch_first
+            # norm_first
+            device,
+            dtype,
+            sequence_len,
+            batch_size=batch_size
+        )
+
+    return TransformerEncoderLayer
+
+class NystromTransformerEncoder(Sequential):
     """Retroactive Nystrom Continual Transformer Encoder is a stack of N Nyström encoder layers.
 
     TODO: Change description

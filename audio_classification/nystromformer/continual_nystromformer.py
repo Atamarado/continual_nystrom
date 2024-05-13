@@ -38,7 +38,9 @@ State = Tuple[
     Tensor,  # Beta_mem (B, n-1, m-1)
     Tensor,  # Gamma_mem (B, m-1, m-1)
 
-    Tensor,  # state_index
+    Tensor,  # q_tilde_new (B, 1, d)
+    Tensor,  # k_tilde_new (B, 1, d)
+
     int,  # iteration
 ]
 
@@ -76,7 +78,9 @@ def _scaled_dot_product_attention_default_state(
         init_fn(B, n-1, m-1),
         init_fn(B, m-1, m-1),
 
-        init_fn(0),
+        init_fn(B, 1, d),
+        init_fn(B, 1, d),
+
         0
     )
     return default_state
@@ -130,7 +134,6 @@ def _scaled_dot_product_attention(
     if N % m != 0:
         raise ValueError("N must be divisible by m to apply Nyströmformers")
 
-
     device = q.device
 
     Q = torch.div(q, math.sqrt(math.sqrt(E)))
@@ -179,7 +182,9 @@ def _scaled_dot_product_attention(
         Beta[:, 1:, 1:],
         Gamma[:, 1:, 1:],
 
-        torch.empty(), # TODO: Learn what to do with it
+        torch.zeros((B, 1, E), device=device),
+        torch.zeros((B, 1, E), device=device),
+
         0
     )
 
@@ -196,8 +201,9 @@ def _scaled_dot_product_attention_step(
     dropout_p: float = 0.0,
     use_conv: bool = False,
     update_landmarks: bool = True,
-    stable_exp: bool = True,
-    return_kernels: bool = False
+    single_output: bool = False,
+    stable_exp: float = None,
+    return_kernels: bool = False,
 ) -> Tuple[Tensor, State]:
     """
     Computes the Continual Retroactive Scaled Nyströmformer Dot-Product Attention on query, key and value tensors.
@@ -209,6 +215,8 @@ def _scaled_dot_product_attention_step(
             attention. May be 2D or 3D; see Shape section for details.
         dropout_p: dropout probability. If greater than 0.0, dropout is applied.
         use_conv: Indicates whether to apply a convolution layer over the value input or not. Default=False
+        update_landmarks: Whether to update landmarks or not. Default=True
+        single_output: Indicates which mode the attention step is done. Default=False
 
     Shape:
         - q_step: :math:`(B, E)` where B is batch size and E is embedding dimension.
@@ -242,7 +250,9 @@ def _scaled_dot_product_attention_step(
         Beta_mem,
         Gamma_mem,
 
-        state_index,  # TODO: Check if it's necessary
+        q_tilde_new,
+        k_tilde_new,
+
         iteration
     ) = prev_state
 
@@ -289,16 +299,20 @@ def _scaled_dot_product_attention_step(
         dim=1
     )
 
-    if update_landmarks and (iteration % tokens_per_landmark == tokens_per_landmark - 1):
+    if update_landmarks:
+        # Add the contribution of q_new, k_new to the landmarks
+        q_tilde_new += torch.div(q_new, tokens_per_landmark)
+        k_tilde_new += torch.div(k_new, tokens_per_landmark)
+
+    if update_landmarks and (iteration % tokens_per_landmark == 0):
         # Landmark changes
-        # New landmarks
-        q_tilde_new = Q[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2) # TODO: Change landmark update for a method that stacks up the values in State
-        k_tilde_new = K[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2)
+
+        # assert torch.allclose(q_tilde_new, Q[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2))
+        # assert torch.allclose(k_tilde_new, K[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2))
 
         k_tilde_old = K_tilde[:, 0].unsqueeze(dim=-2)
 
         Q_mem = Q[:, :-1]
-        K_mem = K[:, :-1]
 
         Q_tilde_mem = Q_tilde[:, 1:]
         K_tilde_mem = K_tilde[:, 1:]
@@ -318,45 +332,15 @@ def _scaled_dot_product_attention_step(
             dim=1
         )
 
-        # Beta update
-        Beta_A = qk_product(Q_mem, k_tilde_new, stable_exp=stable_exp)
-        Beta_B = qk_product(q_new, K_tilde_mem, stable_exp=stable_exp)
-        Beta_C = qk_product(q_new, k_tilde_new, stable_exp=stable_exp)
-        Beta = continual_matrix_concat(Beta_mem, Beta_A, Beta_B, Beta_C)
-        Beta_mem = Beta[:, 1:, 1:]
-
         # Gamma update
         Gamma_A = qk_product(Q_tilde_mem, k_tilde_new, stable_exp=stable_exp)
-        Gamma_B = qk_product(q_tilde_new, K_tilde_mem, stable_exp=stable_exp)
-        Gamma_C = qk_product(q_tilde_new, k_tilde_new, stable_exp=stable_exp)
-        Gamma = continual_matrix_concat(Gamma_mem, Gamma_A, Gamma_B, Gamma_C)
+        Gamma_B = qk_product(q_tilde_new, K_tilde, stable_exp=stable_exp)
+        Gamma = continual_matrix_concat(Gamma_mem, Gamma_A, Gamma_B)
         Gamma_mem = Gamma[:, 1:, 1:]
 
-        # d_Beta update
-        d_Beta = d_Beta_prev - qk_product(Q_mem, k_tilde_old, stable_exp=stable_exp) + Beta_A  # qk_product(Q_mem, k_tilde_new, stable_exp=stable_exp)
-        d_Beta_new = torch.cat((
-            Beta_B,  # qk_product(q_new, K_tilde_mem),
-            Beta_C  # qk_product(q_new, k_tilde_new)
-            ),
-            dim=2
-        )
-        d_Beta_new = torch.bmm(d_Beta_new, torch.ones((B, m, 1), device=device))
-        d_Beta = torch.cat((
-            d_Beta,
-            d_Beta_new
-            ),
-            dim=1
-        )
-        d_Beta_mem = d_Beta[:, 1:]
-
         # Next: d_Gamma update
-        d_Gamma = d_Gamma_prev - qk_product(Q_tilde_mem, k_tilde_old, stable_exp=stable_exp) + Gamma_A  # qk_product(Q_tilde_mem, k_tilde_new)
-        d_Gamma_new = torch.cat((
-            Gamma_B,  # qk_product(q_tilde_new, K_tilde_mem),
-            Gamma_C,  # qk_product(q_tilde_new, k_tilde_new)
-        ),
-            dim=2
-        )
+        d_Gamma = d_Gamma_prev - qk_product(Q_tilde_mem, k_tilde_old, stable_exp=stable_exp) + Gamma_A
+        d_Gamma_new = Gamma_B
         d_Gamma_new = torch.bmm(d_Gamma_new, torch.ones((B, m, 1), device=device))
         d_Gamma = torch.cat((
             d_Gamma,
@@ -365,6 +349,36 @@ def _scaled_dot_product_attention_step(
             dim=1
         )
         d_Gamma_mem = d_Gamma[:, 1:]
+
+        Gamma_D = iterative_inv(odot(d_Gamma, Gamma))
+
+        # Beta, d_Beta update
+        Beta_B = qk_product(q_new, K_tilde, stable_exp=stable_exp)
+        d_Beta_new = torch.bmm(Beta_B, torch.ones((B, m, 1), device=device))
+
+        if single_output:
+            Beta_D_new = odot(d_Beta_new, Beta_B)
+            Beta_D_Gamma_D_new = torch.bmm(Beta_D_new, Gamma_D)
+        else:
+            Beta_A = qk_product(Q_mem, k_tilde_new, stable_exp=stable_exp)
+            Beta = continual_matrix_concat(Beta_mem, Beta_A, Beta_B)
+            Beta_mem = Beta[:, 1:, 1:]
+
+            # d_Beta update
+            d_Beta = d_Beta_prev - qk_product(Q_mem, k_tilde_old, stable_exp=stable_exp) + Beta_A
+            d_Beta = torch.cat((
+                d_Beta,
+                d_Beta_new
+                ),
+                dim=1
+            )
+            d_Beta_mem = d_Beta[:, 1:]
+
+            # Vector matrix multiplications
+            Beta_D = odot(d_Beta, Beta)
+
+            BetaD_GammaD = torch.bmm(Beta_D, Gamma_D)
+            BetaD_GammaD_mem = BetaD_GammaD[:, 1:]
 
         # Next: d_Delta update
         Delta_old = qk_product(Q_tilde_mem, k_old, stable_exp=stable_exp)
@@ -398,12 +412,9 @@ def _scaled_dot_product_attention_step(
         # Delta^D odot
         DeltaD_V = odot(d_Delta, Delta_V)
 
-        # Vector matrix multiplications
-        Beta_D = odot(d_Beta, Beta)
-        Gamma_D = iterative_inv(odot(d_Gamma, Gamma))
-
-        BetaD_GammaD = torch.bmm(Beta_D, Gamma_D)
-        BetaD_GammaD_mem = BetaD_GammaD[:, 1:]
+        # Reset new landmark memory
+        q_tilde_new = torch.zeros((B, 1, d), device=device)
+        k_tilde_new = torch.zeros((B, 1, d), device=device)
 
     else:
         # Same landmarks
@@ -414,17 +425,20 @@ def _scaled_dot_product_attention_step(
         d_Beta_new = torch.bmm(Beta_new, torch.ones((B, m, 1), device=device))
         Beta_D_new = odot(d_Beta_new, Beta_new)
 
-        BetaD_GammaD = torch.cat((
-            BetaD_GammaD_mem,
-            torch.bmm(Beta_D_new, Gamma_D)
-            ),
-            dim=1
-        )
-        BetaD_GammaD_mem = BetaD_GammaD[:, 1:]
+        Beta_D_Gamma_D_new = torch.bmm(Beta_D_new, Gamma_D)
+
+        if not single_output:
+            BetaD_GammaD = torch.cat((
+                BetaD_GammaD_mem,
+                Beta_D_Gamma_D_new
+                ),
+                dim=1
+            )
+            BetaD_GammaD_mem = BetaD_GammaD[:, 1:]
 
         # Delta^D * V computation
-        Delta_old = qk_product(Q_tilde, k_old, stable_exp=stable_exp)
-        Delta_new = qk_product(Q_tilde, k_new, stable_exp=stable_exp)
+        Delta_old = qk_product(Q_tilde, k_old , stable_exp=stable_exp)
+        Delta_new = qk_product(Q_tilde, k_new , stable_exp=stable_exp)
 
         Delta_V = DeltaV_prev - torch.bmm(Delta_old, v_old) + torch.bmm(Delta_new, v_new)
         d_Delta = d_Delta_prev - Delta_old + Delta_new
@@ -433,21 +447,28 @@ def _scaled_dot_product_attention_step(
         DeltaD_V = odot(d_Delta, Delta_V)
 
         # Update Beta_mem and d_Beta_mem
-        Beta_mem = torch.cat((
-            Beta_mem[:, 1:],
-            Beta_new[:, :, 1:]
-            ),
-            dim=1
-        )
-        d_Beta_mem = torch.cat((
-            d_Beta_prev[:, 1:],
-            d_Beta_new
-            ),
-            dim=1
-        )
+        if not single_output:
+            Beta_mem = torch.cat((
+                Beta_mem[:, 1:],
+                Beta_new[:, :, 1:]
+                ),
+                dim=1
+            )
+            d_Beta_mem = torch.cat((
+                d_Beta_prev[:, 1:],
+                d_Beta_new
+                ),
+                dim=1
+            )
 
     # Operations common to both branches
-    output = torch.bmm(BetaD_GammaD, DeltaD_V)
+    if single_output:
+        output = torch.bmm(Beta_D_Gamma_D_new, DeltaD_V)
+    else:
+        output = torch.bmm(BetaD_GammaD, DeltaD_V)
+
+    if single_output:
+        d_Beta_mem = d_Beta_prev  # TODO: Dummy update to keep dimensionality
 
     new_states = (
         Q_tilde,
@@ -457,17 +478,19 @@ def _scaled_dot_product_attention_step(
         K,
         V,
 
-        BetaD_GammaD_mem,
+        BetaD_GammaD_mem,  # TODO: not used for single_output
         Gamma_D,
         d_Delta,
         Delta_V,
 
-        d_Beta_mem,
+        d_Beta_mem, # TODO: not used for single_output
         d_Gamma_mem,
-        Beta_mem,
+        Beta_mem, # TODO: not used for single_output
         Gamma_mem,
 
-        state_index,
+        q_tilde_new,
+        k_tilde_new,
+
         iteration
     )
 
@@ -487,7 +510,7 @@ def _scaled_dot_product_attention_step(
 
 class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
     """
-    MultiHeadAttention with retroactively updated attention outputs during continual inference.
+    MultiHeadAttention with retroactively or single output updated attention outputs during continual inference.
 
     Continual MHAs were proposed by Hedegaard et al. in
     "Continual Transformers: Redundancy-Free Attention for Online Inference"
@@ -566,8 +589,12 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         embed_dim_second=False,
         init_mem=True,
         batch_size=32,
-        single_output_forward=False,  # TODO: Added to make Retroactive Single Output. Remove later
+        single_output_mode=False,
+        single_output_forward=False,
+        query_index=None
     ) -> None:
+        assert single_output_mode >= single_output_forward # single_output_forward can only be True when single_output_mode is
+
         NystromMultiheadAttention.__init__(
             self,
             sequence_len,
@@ -582,23 +609,9 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         )
 
         self.embed_dim_second = embed_dim_second
+        self.single_output_mode = single_output_mode
         self.single_output_forward = single_output_forward
-
-        # self.register_buffer("Q_tilde", torch.tensor([]), persistent=False)
-        # self.register_buffer("K_tilde", torch.tensor([]), persistent=False)
-        # self.register_buffer("Q", torch.tensor([]), persistent=False)
-        # self.register_buffer("K", torch.tensor([]), persistent=False)
-        # self.register_buffer("V", torch.tensor([]), persistent=False)
-        # self.register_buffer("BetaD_GammaD_mem", torch.tensor([]), persistent=False)
-        # self.register_buffer("Gamma_D", torch.tensor([]), persistent=False)
-        # self.register_buffer("d_Delta_prev", torch.tensor([]), persistent=False)
-        # self.register_buffer("DeltaV_prev", torch.tensor([]), persistent=False)
-        # self.register_buffer("d_Beta_prev", torch.tensor([]), persistent=False)
-        # self.register_buffer("d_Gamma_prev", torch.tensor([]), persistent=False)
-        # self.register_buffer("Beta_mem", torch.tensor([]), persistent=False)
-        # self.register_buffer("Gamma_mem", torch.tensor([]), persistent=False)
-        # self.register_buffer("state_index", torch.tensor([]), persistent=False)
-        # self.register_buffer("iteration", torch.tensor(0), persistent=False)
+        self.query_index = query_index
 
         if init_mem:
             torch.set_default_device(device=device)
@@ -606,100 +619,22 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             self.set_state(state)
             torch.set_default_device(device="cpu")
 
+    def forward(self, query, key=None, value=None):
+        if not self.single_output_forward or not self.single_output_mode:
+            return NystromMultiheadAttention.forward(
+                self, query, key, value
+            )
 
-    def get_state(self) -> Optional[State]:
-        return (
-            self.Q_tilde,
-            self.K_tilde,
-            self.Q,
-            self.K,
-            self.V,
-            self.BetaD_GammaD_mem,
-            self.Gamma_D,
-            self.d_Delta_prev,
-            self.DeltaV_prev,
-            self.d_Beta_prev,
-            self.d_Gamma_prev,
-            self.Beta_mem,
-            self.Gamma_mem,
-            self.state_index,
-            self.iteration,
+        if key is None:
+            key = query
+        if value is None:
+            value = query
+
+        o = NystromMultiheadAttention.forward(
+            self, query, key, value, single_output_forward=True
         )
 
-    def set_state(self, state: State):
-        (
-            self.Q_tilde,
-            self.K_tilde,
-            self.Q,
-            self.K,
-            self.V,
-            self.BetaD_GammaD_mem,
-            self.Gamma_D,
-            self.d_Delta_prev,
-            self.DeltaV_prev,
-            self.d_Beta_prev,
-            self.d_Gamma_prev,
-            self.Beta_mem,
-            self.Gamma_mem,
-            self.state_index,
-            self.iteration,
-        ) = state
-
-    def clean_state(self):
-        self.Q_tilde = torch.tensor([], device=self.Q_tilde.device)
-        self.K_tilde = torch.tensor([], device=self.K_tilde.device)
-        self.Q = torch.tensor([], device=self.Q.device)
-        self.K = torch.tensor([], device=self.K.device)
-        self.V = torch.tensor([], device=self.V.device)
-        self.BetaD_GammaD_mem = torch.tensor([], device=self.BetaD_GammaD_mem.device)
-        self.Gamma_D = torch.tensor([], device=self.Gamma_D.device)
-        self.d_Delta_prev = torch.tensor([], device=self.d_Delta_prev.device)
-        self.DeltaV_prev = torch.tensor([], device=self.DeltaV_prev.device)
-        self.d_Beta_prev = torch.tensor([], device=self.d_Beta_prev.device)
-        self.d_Gamma_prev = torch.tensor([], device=self.d_Gamma_prev.device)
-        self.Beta_mem = torch.tensor([], device=self.Beta_mem.device)
-        self.Gamma_mem = torch.tensor([], device=self.Gamma_mem.device)
-        self.state_index = torch.tensor([], device=self.state_index.device)
-        self.state_index = torch.tensor(0)
-
-    # def _forward_step(
-    #     self,
-    #     query: Tensor,
-    #     key: Tensor = None,
-    #     value: Tensor = None,
-    #     prev_state: Optional[State] = None,
-    # ) -> Tuple[Optional[Tensor], State]:
-    #     """
-    #     Args:
-    #         query, key, value: step_inputs for mapping a query and a set of key-value pairs to an output.
-    #             See "Attention Is All You Need" for more details.
-    #
-    #     Shapes for inputs:
-    #         - query: :math:`(N, E)` where N is the batch size, E is the embedding dimension.
-    #         - key: :math:`(N, E)`, where N is the batch size, E is the embedding dimension.
-    #         - value: :math:`(N, E)` where N is the batch size, E is the embedding dimension.
-    #
-    #     Shapes for outputs:
-    #         - attn_output: :math:`(L, N, E)` where L is the target sequence length, N is the batch size,
-    #           E is the embedding dimension. :math:`(N, L, E)` if ``batch_first`` is ``True``.
-    #           :math:`(N, E, L)` if ``batch_first`` and ``embed_dim_second ``True``.
-    #     """
-    #     if key is None:
-    #         key = query
-    #     if value is None:
-    #         value = query
-    #
-    #     o, next_state = MultiheadAttentionBase._forward_step(
-    #         self, query, key, value, prev_state
-    #     )
-    #
-    #     if o is not None:
-    #         if self.batch_first:
-    #             o = o.transpose(1, 0)
-    #         if self.embed_dim_second:
-    #             o = o.transpose(1, 2)
-    #
-    #     return o, next_state
+        return o
 
     def forward_step(
         self,
@@ -731,7 +666,7 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             value = query
 
         o, new_state = _scaled_dot_product_attention_step(
-            self.get_state(), query, key, value
+            self.get_state(), query, key, value, single_output=self.single_output_mode
         )
 
         if update_state:
@@ -739,9 +674,6 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
 
         if isinstance(o, Tensor) and self.embed_dim_second:
             o = o.transpose(1, 2)
-
-        if self.single_output_forward:
-            o = o[:, :, -1]
 
         return o
 

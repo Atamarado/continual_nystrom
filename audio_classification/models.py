@@ -3,7 +3,9 @@ import torch
 import torch.nn as nn
 
 from continual import RecyclingPositionalEncoding
-from nystromformer.transformer import RetroactiveNystromTransformerEncoderLayer
+from nystromformer.transformer import (SingleOutputNystromTransformerEncoderLayer,
+                                       NystromTransformerEncoderLayerFactory,
+                                       NystromTransformerEncoder)
 from nystromformer.nystromformer import LearnedPositionalEncoding
 
 def CoNystromTransformerModel(
@@ -18,7 +20,7 @@ def CoNystromTransformerModel(
     device=None
 ):
     if depth == 1:
-        transformer_encoder = RetroactiveNystromTransformerEncoderLayer(
+        transformer_encoder = SingleOutputNystromTransformerEncoderLayer(
             d_model=embed_dim,
             nhead=heads,
             num_landmarks=num_landmarks,
@@ -28,17 +30,21 @@ def CoNystromTransformerModel(
             sequence_len=sequence_len,
             batch_size=batch_size,
             device=device,
-            single_output_forward=True  # TODO: Should be SingleOutput and not retroactive, this is just to make it work
+            single_output_forward=True
         )
     else:
-        encoder_layer = co.TransformerEncoderLayerFactory( # TODO: Change for Nystrom
+        encoder_layer = NystromTransformerEncoderLayerFactory( # TODO: Change for Nystrom
             d_model=embed_dim,
             nhead=heads,
+            num_landmarks=num_landmarks,
             dim_feedforward=mlp_dim,
             dropout=dropout_rate,
             activation=nn.GELU(),
-            sequence_len=sequence_len)
-        transformer_encoder = co.TransformerEncoder(encoder_layer, num_layers=depth)
+            sequence_len=sequence_len,
+            batch_size=batch_size,
+            device=device
+        )
+        transformer_encoder = NystromTransformerEncoder(encoder_layer, num_layers=depth)
     return transformer_encoder
 
 def CoTransformerModel(

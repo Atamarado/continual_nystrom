@@ -12,13 +12,13 @@ from nystromformer.utils import qk_product, iterative_inv, odot
 def compute_diff(pred, target, mode="l2"):
     assert mode in ["l1", "l2"]
     if mode == "l2":
-        diff = torch.sqrt(torch.sum(torch.pow(torch.subtract(pred, target), 2), dim=0))
+        diff = torch.sqrt(torch.sum(torch.pow(torch.subtract(pred, target), 2))) / torch.numel(target)
     else:  # abs
-        diff = torch.abs(pred - target)
+        diff = torch.mean(torch.abs(pred - target))
     print("Mean: "+str(torch.mean(diff)))
     print("Max: "+str(torch.max(torch.abs(torch.subtract(pred, target)))))
 
-def nystromformer_exp(q, k, v, m, stable_exp=False, state_mode=False):
+def nystromformer_exp(q, k, v, m, stable_exp=None, state_mode=False):
     device = q.device
     B, Nt, E = q.shape
 
@@ -63,7 +63,9 @@ def nystromformer_exp(q, k, v, m, stable_exp=False, state_mode=False):
             Beta[:, 1:, 1:],
             Gamma[:, 1:, 1:],
 
-            torch.empty(1),
+            torch.zeros((B, 1, E), device=device),
+            torch.zeros((B, 1, E), device=device),
+
             0
         )
         return state
@@ -83,8 +85,8 @@ def compute_landmarks(state: State, q, k, m):
         _, # Q_tilde
         _, # K_tilde
 
-        _,
-        _,
+        Q,
+        K,
         V,
 
         BetaD_GammaD_mem,
@@ -97,7 +99,9 @@ def compute_landmarks(state: State, q, k, m):
         Beta_mem,
         _, # Gamma_mem
 
-        state_index,
+        q_tilde_new,
+        k_tilde_new,
+
         iteration
     ) = state
 
@@ -117,8 +121,8 @@ def compute_landmarks(state: State, q, k, m):
         Q_tilde,
         K_tilde,
 
-        q,
-        k,
+        Q,
+        K,
         V,
 
         BetaD_GammaD_mem,
@@ -131,7 +135,9 @@ def compute_landmarks(state: State, q, k, m):
         Beta_mem,
         Gamma[:, 1:, 1:],
 
-        state_index,
+        q_tilde_new,
+        k_tilde_new,
+
         iteration
     )
 
@@ -191,38 +197,44 @@ def test_scaled_dot_product_attention_step():
     g = torch.Generator()
     g.manual_seed(0)
 
-    std = 13
-
+    std = 10
     query1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
     key1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
     value1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
 
     target1, kernel1, kernel2, kernel3 = _scaled_dot_product_attention(query1, key1, value1, m, return_kernels=True)
+    #target1, kernel1, kernel2, kernel3 = nystromformer_exp(query1, key1, value1, m, state_mode=False)
 
     # Now, let's try from zero-init
     state = _scaled_dot_product_attention_default_state(B, N, E, H, m)
-    state = compute_landmarks(state, query1, key1, m)
-    state = nystromformer_exp(query1, key1, value1, m, stable_exp=True, state_mode=True)
+    # state = compute_landmarks(state, query1, key1, m)
+    # state = nystromformer_exp(query1, key1, value1, m, stable_exp=True, state_mode=True)
+
+    quantile = 0.65
+    maximum_exp = torch.bmm(torch.quantile(query1, quantile, dim=1).unsqueeze(-2), torch.quantile(key1, quantile, dim=1).unsqueeze(-1))
+    #maximum_exp = None
+
     for i in range(N):
         if i==N-1:
             output_step, state, Beta, Gamma, Delta = _scaled_dot_product_attention_step(
-                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=True, update_landmarks=False, stable_exp=True
+                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=True, update_landmarks=True, stable_exp=True, maximum_exp=maximum_exp, single_output=True
             )
         else:
             output_step, state = _scaled_dot_product_attention_step(
-                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=False, update_landmarks=False, stable_exp=True
+                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=False, update_landmarks=True, stable_exp=True, maximum_exp=maximum_exp, single_output=True
             )
 
+    print("\n\nStd, "+str(std))
     print("\nDifference Beta: ")
-    compute_diff(kernel1, Beta)
+    compute_diff(Beta, kernel1)
     print("\nDifference Gamma: ")
-    compute_diff(kernel2, Gamma)
+    compute_diff(Gamma, kernel2)
     print("\nDifference Delta: ")
-    compute_diff(kernel3, Delta)
+    compute_diff(Delta, kernel3)
     print("\nDifference outputs: ")
-    compute_diff(output_step, target1)
+    compute_diff(output_step, target1[:, -1].unsqueeze(1))
     pass
 
 if __name__ == '__main__':
-    test_stable_exp(seed=0)
-    #test_scaled_dot_product_attention_step()
+    #test_stable_exp(seed=0)
+    test_scaled_dot_product_attention_step()
