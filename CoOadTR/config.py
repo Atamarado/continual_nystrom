@@ -75,7 +75,7 @@ def get_args_parser():
         "--lr_backbone", default=1e-4, type=float, help="lr_backbone"  # 2e-4
     )
     parser.add_argument(
-        "--feature", default="Anet2016_feature_v2", type=str, help="feature type"
+        "--feature", default="anet", type=str, help="feature type"
     )
     parser.add_argument(
         "--dim_feature", default=3072, type=int, help="input feature dims"
