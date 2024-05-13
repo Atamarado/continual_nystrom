@@ -2,7 +2,7 @@ from typing import Tuple
 import torch
 from torch.functional import Tensor
 import torch.nn as nn
-from .Transformer import TransformerModel, CoTransformerModel
+from .Transformer import TransformerModel, CoTransformerModel, CoNystromTransformerModel
 from .PositionalEncoding import (
     FixedPositionalEncoding,
     LearnedPositionalEncoding,
@@ -30,6 +30,8 @@ def CoVisionTransformer(
     with_camera=True,
     with_motion=True,
     num_channels=3072,
+    nystrom=False,
+    num_landmarks=10
 ):
 
     assert embedding_dim % num_heads == 0
@@ -51,14 +53,25 @@ def CoVisionTransformer(
 
     pe_dropout = nn.Dropout(p=dropout_rate)
 
-    encoder = CoTransformerModel(
-        embedding_dim,
-        num_layers,
-        num_heads,
-        hidden_dim,
-        dropout_rate,
-        attn_dropout_rate,
-    )
+    if nystrom:
+        encoder = CoNystromTransformerModel(
+            embedding_dim,
+            num_layers,
+            num_heads,
+            hidden_dim,
+            dropout_rate,
+            attn_dropout_rate,
+            num_landmarks,
+        )
+    else:
+        encoder = CoTransformerModel(
+            embedding_dim,
+            num_layers,
+            num_heads,
+            hidden_dim,
+            dropout_rate,
+            attn_dropout_rate,
+        )
     pre_head_ln = co.Lambda(nn.LayerNorm(embedding_dim), takes_time=False)
     mlp_head = co.Linear(hidden_dim, out_dim, channel_dim=1)
 

@@ -69,6 +69,12 @@ def get_args_parser():
 
     # encoder
     parser.add_argument(
+        "--nystrom", default=False, type=bool, help="allows to select either nystromformer or regular transformer"
+    )
+    parser.add_argument(
+        "--num_landmarks", default=10, type=int, help="number of landmarks to use when using the nystrom method"
+    )
+    parser.add_argument(
         "--enc_layers", default=64, type=int, help="Number of enc_layers"
     )
     parser.add_argument(

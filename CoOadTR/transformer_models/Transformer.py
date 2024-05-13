@@ -1,7 +1,9 @@
 from torch import nn
 from .Attention import SelfAttention
 import continual as co
-
+from nystromformer.transformer import (SingleOutputNystromTransformerEncoderLayer,
+                                               NystromTransformerEncoderLayerFactory,
+                                               NystromTransformerEncoder)
 
 class Residual(nn.Module):
     def __init__(self, fn):
@@ -80,6 +82,46 @@ class TransformerModel(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+def CoNystromTransformerModel(
+    dim,
+    depth,
+    heads,
+    mlp_dim,
+    dropout_rate=0.1,
+    attn_dropout_rate=0.1,
+    sequence_len=64,
+    num_landmarks=10
+):
+    assert depth in {1, 2}
+
+    if depth == 1:
+        return SingleOutputNystromTransformerEncoderLayer(
+            sequence_len=sequence_len,
+            d_model=dim,
+            nhead=heads,
+            dropout=dropout_rate,
+            query_index=-1,
+            dim_feedforward=mlp_dim,
+            activation=nn.GELU(),
+            device=None,
+            dtype=None,
+            single_output_forward=True,
+            num_landmarks=num_landmarks
+        )
+
+    # depth == 2
+    layer_factory = NystromTransformerEncoderLayerFactory(
+        sequence_len=sequence_len,
+        d_model=dim,
+        nhead=heads,
+        dropout=dropout_rate,
+        dim_feedforward=mlp_dim,
+        activation=nn.GELU(),
+        device=None,
+        dtype=None,
+        num_landmarks=num_landmarks
+    )
+    return NystromTransformerEncoder(layer_factory, num_layers=depth)
 
 def CoTransformerModel(
     dim,
