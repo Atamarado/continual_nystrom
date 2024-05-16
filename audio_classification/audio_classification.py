@@ -9,6 +9,7 @@ import torch.optim as optim
 import torch.nn as nn
 assert torch.cuda.is_available()
 
+import argparse
 import gdown
 import urllib.request
 import librosa
@@ -20,7 +21,7 @@ from ptflops import get_model_complexity_info # TODO: Check whether to use the v
 from audioread import NoBackendError
 import random
 
-
+from config import get_args_parser
 from preprocess_sound import preprocess_sound
 from gtzan_config import *
 from models import NonCoVisionTransformer, CoVisionTransformer, CoNystromVisionTransformer, NonCoNystromVisionTransformer
@@ -245,10 +246,10 @@ def tf_train(config, seed=None):
 
     tf.keras.backend.clear_session()
 
-    test_sequence = TFGTZANSequence('test', config['batch_size'])
-    if config['retrain'] or not os.path.exists(FINE_TUNED_VGGISH_PATH):
-        train_sequence = TFGTZANSequence('train', config['batch_size'])
-        val_sequence = TFGTZANSequence('val', config['batch_size'])
+    test_sequence = TFGTZANSequence('test', config.batch_size)
+    if config.retrain or not os.path.exists(FINE_TUNED_VGGISH_PATH):
+        train_sequence = TFGTZANSequence('train', config.batch_size)
+        val_sequence = TFGTZANSequence('val', config.batch_size)
         vggish = VGGish(
             include_top=True,
             load_weights=True,
@@ -264,7 +265,7 @@ def tf_train(config, seed=None):
             outputs=output
         )
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=config['lr']),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=config.lr),
             loss='categorical_crossentropy',
             metrics=['accuracy']
         )
@@ -294,7 +295,7 @@ def tf_train(config, seed=None):
         history = model.fit(
             train_sequence,
             validation_data=val_sequence,
-            epochs=config['epochs'],
+            epochs=config.epochs,
             shuffle=True,
             callbacks=[
                 lr_reduce,
@@ -424,11 +425,11 @@ MODEL_FOLDER = "saved_models"
 def get_model_path(config):
     return '%s/%s_%d_layers_%s_%s_%s.pth' % (
         MODEL_FOLDER,
-        config['model'],
-        config['num_layers'],
-        config['version'],
-        config['model_seed'],
-        config['data_seed']
+        config.model,
+        config.num_layers,
+        config.version,
+        config.model_seed,
+        config.data_seed
     )
 
 def seed_worker(_):
@@ -456,9 +457,9 @@ def get_dataset(split, seed):
 def fix_landmarks(model, dataset, config, layer_number=0, kmeans_attempts=10):
     print("Computing and fixing landmarks for encoder layer number "+str(layer_number)+"...")
 
-    seed = config['model_seed']
-    total_layers = config['num_layers']
-    freeze_weights = config['freeze_weights']
+    seed = config.model_seed
+    total_layers = config.num_layers
+    freeze_weights = config.freeze_weights
 
     assert layer_number < total_layers
 
@@ -468,7 +469,7 @@ def fix_landmarks(model, dataset, config, layer_number=0, kmeans_attempts=10):
     features = features.cuda()
 
     # TODO: Not very good code
-    if config['num_layers'] == 1:
+    if config.num_layers == 1:
         nystrom_module = model[3][0][1]
     elif layer_number == 0:
         nystrom_module = model[3][0][0][0][1]
@@ -549,47 +550,47 @@ def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criter
     return train_accuracy, best_val_accuracy
 
 def torch_train(config):
-    assert config["model"] in ["base", "base_continual", "nystromformer", "continual_nystrom"]
-    assert config["num_layers"] >= len(config["fit_layer_epochs"])
+    assert config.model in ["base", "base_continual", "nystromformer", "continual_nystrom"]
+    assert config.num_layers >= len(config.fit_layer_epochs)
 
     g = torch.Generator()
-    g.manual_seed(config["data_seed"])
+    g.manual_seed(config.data_seed)
 
-    train_dataset = get_dataset('train', config["data_seed"])
+    train_dataset = get_dataset('train', config.data_seed)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        batch_size=config['batch_size'],
+        batch_size=config.batch_size,
         shuffle=True,
-        #num_workers=config['batch_size'],
+        #num_workers=config.batch_size,
         worker_init_fn=seed_worker,
         generator=g
     )
-    val_dataset = get_dataset('val', config["data_seed"])
+    val_dataset = get_dataset('val', config.data_seed)
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=config['batch_size'],
+        batch_size=config.batch_size,
         shuffle=False,
-        #num_workers=config['batch_size'],
+        #num_workers=config.batch_size,
         worker_init_fn=seed_worker,
         generator=g
     )
-    test_dataset = get_dataset('test', config["data_seed"])
+    test_dataset = get_dataset('test', config.data_seed)
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size=config['batch_size'],
+        batch_size=config.batch_size,
         shuffle=False,
-        #num_workers=config['batch_size'],
+        #num_workers=config.batch_size'],
         worker_init_fn=seed_worker,
         generator=g
     )
 
-    if config['model_seed']:
-        torch.manual_seed(config['model_seed'])
-        random.seed(config['model_seed'])
-        np.random.seed(config['model_seed'])
+    if config.model_seed:
+        torch.manual_seed(config.model_seed)
+        random.seed(config.model_seed)
+        np.random.seed(config.model_seed)
 
     # create and load mode
-    match config["model"]:
+    match config.model:
         case "base":
             model = NonCoVisionTransformer(
                 sequence_len=SEQ_LEN,
@@ -598,7 +599,7 @@ def torch_train(config):
                 attn_ff_hidden_dim=192,
                 out_dim=10,
                 num_heads=16,
-                num_layers=config['num_layers'],
+                num_layers=config.num_layers,
                 dropout_rate=0.1,
             )
         case "base_continual":
@@ -609,7 +610,7 @@ def torch_train(config):
                 attn_ff_hidden_dim=192,
                 out_dim=10,
                 num_heads=16,
-                num_layers=config['num_layers'],
+                num_layers=config.num_layers,
                 dropout_rate=0.1,
             )
         case "nystromformer":
@@ -620,10 +621,10 @@ def torch_train(config):
                 attn_ff_hidden_dim=192,
                 out_dim=10,
                 num_heads=16,
-                num_layers=config['num_layers'],
+                num_layers=config.num_layers,
                 dropout_rate=0.1,
                 device="cuda:" + str(SELECTED_GPUS[0]),
-                num_landmarks=config['num_landmarks'],
+                num_landmarks=config.num_landmarks,
             )
         case "continual_nystrom":
             model = CoNystromVisionTransformer(
@@ -633,11 +634,11 @@ def torch_train(config):
                 attn_ff_hidden_dim=192,
                 out_dim=10,
                 num_heads=16,
-                num_layers=config['num_layers'],
+                num_layers=config.num_layers,
                 dropout_rate=0.1,
-                batch_size=config['batch_size'],
+                batch_size=config.batch_size,
                 device="cuda:"+str(SELECTED_GPUS[0]),
-                num_landmarks=config['num_landmarks'],
+                num_landmarks=config.num_landmarks,
             )
 
     if torch.cuda.device_count() > 1:
@@ -645,23 +646,23 @@ def torch_train(config):
     model.cuda()
 
     # optimizer and loss
-    optimizer = optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
+    optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     criterion = nn.CrossEntropyLoss()  # CrossEntropyLoss includes the softmax
 
     os.makedirs(MODEL_FOLDER, exist_ok=True)
 
     writer = SummaryWriter()
 
-    total_epochs = config['epochs'] + sum(config['fit_layer_epochs'])
+    total_epochs = config.epochs + sum(config.fit_layer_epochs)
 
     # training loop
     best_val_accuracy = 0.0
-    for epoch in range(config['epochs']):
+    for epoch in range(config.epochs):
         train_accuracy, best_val_accuracy = train_one_epoch(model, config, epoch, total_epochs, optimizer, criterion, train_loader, val_loader,
                                             writer, best_val_accuracy)
 
-    cum_epoch = config['epochs']
-    for num_layer, num_epochs_fit in enumerate(config['fit_layer_epochs']):
+    cum_epoch = config.epochs
+    for num_layer, num_epochs_fit in enumerate(config.fit_layer_epochs):
         fix_landmarks(model, train_dataset, config, layer_number=num_layer)
         for _ in range(num_epochs_fit):
             train_accuracy, best_val_accuracy = train_one_epoch(model, config, cum_epoch, total_epochs, optimizer, criterion, train_loader,
@@ -674,14 +675,14 @@ def torch_train(config):
     # Reload best model for test
     model.load_state_dict(torch.load(get_model_path(config)))
 
-    if config["model"] == "continual_nystrom":
+    if config.model == "continual_nystrom":
         model[3].call_mode = "forward_steps"
     test_accuracy = calculate_accuracy(model, test_loader)
 
     return model, train_accuracy, best_val_accuracy, test_accuracy
 
 def get_flops_and_params(model, config):
-    if config['model'] in ["base_continual", "continual_nystrom"]:
+    if config.model in ["base_continual", "continual_nystrom"]:
         warm_up_input = torch.randn(1, INPUT_DIM, SEQ_LEN)
         model.to('cpu')
         assert next(model.parameters()).is_cuda == warm_up_input.is_cuda
@@ -797,47 +798,54 @@ if __name__ == "__main__":
     with open(params_path, 'wt') as write_file:
         write_file.write(text.replace('496', '96').replace('4.96', '0.96'))
 
-    tf_config = {
-        'batch_size': 64,
-        'epochs': 100,
-        'lr': 1e-4,
-        'retrain': False,
-    }
-    tf_train(tf_config)
+    parser = argparse.ArgumentParser(
+        "Audio classification python program", parents=[get_args_parser()]
+    )
+    config = parser.parse_args()
+    model, train_accuracy, val_accuracy, test_accuracy = torch_train(config)
+    pass
 
-    head_model = tf.keras.models.load_model(FINE_TUNED_VGGISH_PATH)
-    head_params = get_tf_params(head_model)
-    head_flops = get_tf_flops(head_model)
-    print('Head: params %.2fM; FLOPS %.2fM' % (head_params / 10 ** 6, head_flops / 10 ** 6))
+    # tf_config = {
+    #     'batch_size': 64,
+    #     'epochs': 100,
+    #     'lr': 1e-4,
+    #     'retrain': False,
+    # }
+    # tf_train(tf_config)
+    #
+    # head_model = tf.keras.models.load_model(FINE_TUNED_VGGISH_PATH)
+    # head_params = get_tf_params(head_model)
+    # head_flops = get_tf_flops(head_model)
+    # print('Head: params %.2fM; FLOPS %.2fM' % (head_params / 10 ** 6, head_flops / 10 ** 6))
+    #
+    # FILENAME = 'results_dummy.txt'
 
-    FILENAME = 'results_dummy.txt'
-
-    torch_config = {
-        'batch_size': 32,
-        'lr': 1e-5,
-        'weight_decay': 1e-4,
-        'epochs': 50,
-        'version': 'v5',
-        'num_layers': 1,
-        'model': 'nystromformer',
-        'num_landmarks': 10,
-        'fit_layer_epochs': [5],
-        'freeze_weights': True,
-    }
-    evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
-
-    torch_config["num_layers"] = 2
-    torch_config['fit_layer_epochs'] = [5, 5]
-    evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
-
-    torch_config["num_layers"] = 1
-    torch_config['fit_layer_epochs'] = [5]
-    torch_config["model"] = "continual_nystrom"
-    evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
-
-    torch_config["num_layers"] = 2
-    torch_config['fit_layer_epochs'] = [5, 5]
-    evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
+    # torch_config = {
+    #     'batch_size': 32,
+    #     'lr': 1e-5,
+    #     'weight_decay': 1e-4,
+    #     'epochs': 50,
+    #     'version': 'v5',
+    #     'num_layers': 1,
+    #     'model': 'nystromformer',
+    #     'num_landmarks': 10,
+    #     'fit_layer_epochs': [5],
+    #     'freeze_weights': True,
+    # }
+    # evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
+    #
+    # torch_config["num_layers"] = 2
+    # torch_config['fit_layer_epochs'] = [5, 5]
+    # evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
+    #
+    # torch_config["num_layers"] = 1
+    # torch_config['fit_layer_epochs'] = [5]
+    # torch_config["model"] = "continual_nystrom"
+    # evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
+    #
+    # torch_config["num_layers"] = 2
+    # torch_config['fit_layer_epochs'] = [5, 5]
+    # evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
 
         # torch_config = {
         #     'batch_size': 32,
