@@ -422,15 +422,26 @@ def calculate_accuracy(model, data_loader):
     return accuracy
 
 MODEL_FOLDER = "saved_models"
-def get_model_path(config):
-    return '%s/%s_%d_layers_%s_%s_%s.pth' % (
-        MODEL_FOLDER,
-        config.model,
-        config.num_layers,
-        config.version,
-        config.model_seed,
-        config.data_seed
-    )
+def get_model_path(config, fixed_landmarks=True):
+    if config.model in ['base', 'base_continual'] or not fixed_landmarks:
+        return '%s/%s_%d_layers_seeds_%d_%d.pth' % (
+            MODEL_FOLDER,
+            config.model,
+            config.num_layers,
+            config.model_seed,
+            config.data_seed
+        )
+    else:
+        return '%s/%s_%d_layers_%d_landmarks_%s_%d_seeds_%d_%d.pth' % (
+            MODEL_FOLDER,
+            config.model,
+            config.num_layers,
+            config.num_landmarks,
+            config.fit_layer_epochs,
+            config.freeze_weights,
+            config.model_seed,
+            config.data_seed
+        )
 
 def seed_worker(_):
     worker_seed = torch.initial_seed() % 2**32
