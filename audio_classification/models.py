@@ -17,7 +17,8 @@ def CoNystromTransformerModel(
     dropout_rate=0.1,
     sequence_len=64,
     batch_size=32,
-    device=None
+    device=None,
+    fixed_landmarks=False,
 ):
     if depth == 1:
         transformer_encoder = SingleOutputNystromTransformerEncoderLayer(
@@ -30,7 +31,8 @@ def CoNystromTransformerModel(
             sequence_len=sequence_len,
             batch_size=batch_size,
             device=device,
-            single_output_forward=True
+            single_output_forward=True,
+            fixed_landmarks=fixed_landmarks,
         )
     else:
         encoder_layer = NystromTransformerEncoderLayerFactory(
@@ -42,7 +44,8 @@ def CoNystromTransformerModel(
             activation=nn.GELU(),
             sequence_len=sequence_len,
             batch_size=batch_size,
-            device=device
+            device=device,
+            fixed_landmarks=fixed_landmarks,
         )
         transformer_encoder = NystromTransformerEncoder(encoder_layer, num_layers=depth)
     return transformer_encoder
@@ -119,7 +122,7 @@ def CoVisionTransformer(
         mlp_head,
     )
 
-def NonCoNystromVisionTransformer( # TODO: Temporary solution. Fix later
+def NonCoNystromVisionTransformer(
         sequence_len,
         input_dim,
         embedding_dim,
@@ -127,8 +130,10 @@ def NonCoNystromVisionTransformer( # TODO: Temporary solution. Fix later
         out_dim,
         num_heads,
         num_layers,
+        device=None,
         dropout_rate=0.1,
-        num_landmarks=10
+        num_landmarks=10,
+        fixed_landmarks=False,
 ):
     return CoNystromVisionTransformer(
         sequence_len,
@@ -138,9 +143,11 @@ def NonCoNystromVisionTransformer( # TODO: Temporary solution. Fix later
         out_dim,
         num_heads,
         num_layers,
+        device=device,
         num_landmarks=num_landmarks,
         dropout_rate=dropout_rate,
         continual=False,
+        fixed_landmarks=fixed_landmarks,
     )
 
 def CoNystromVisionTransformer(
@@ -155,7 +162,8 @@ def CoNystromVisionTransformer(
     continual=True,
     device=None,
     batch_size=32,
-    num_landmarks=10
+    num_landmarks=10,
+    fixed_landmarks=False,
 ):
 
     assert embedding_dim % num_heads == 0
@@ -186,6 +194,7 @@ def CoNystromVisionTransformer(
         sequence_len,
         device=device,
         batch_size=batch_size,
+        fixed_landmarks=fixed_landmarks,
     )
     pre_head_ln = co.Lambda(nn.LayerNorm(embedding_dim), takes_time=False)
     mlp_head = co.Linear(embedding_dim, out_dim, channel_dim=1)

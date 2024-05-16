@@ -55,8 +55,8 @@ def _scaled_dot_product_attention_default_state(
     device=None,
 ) -> State:
     init_fn = partial(init_fn, dtype=dtype, device=device)
-    d = embed_dim
-    B = batch_size
+    d = embed_dim // num_heads
+    B = batch_size * num_heads
     n = sequence_len
     m = num_landmarks
 
@@ -70,7 +70,7 @@ def _scaled_dot_product_attention_default_state(
 
         init_fn((B, n-1, m)),
         init_fn((B, m, m)),
-        init_fn((B, m, 1)),
+        torch.full((B, m, 1), n),  # init_fn((B, m, 1))
         init_fn((B, m, d)),
 
         init_fn(B, n-1, 1),
@@ -200,7 +200,7 @@ def _scaled_dot_product_attention_step(
     attn_mask: Optional[Tensor] = None,
     dropout_p: float = 0.0,
     use_conv: bool = False,
-    update_landmarks: bool = True,
+    fixed_landmarks: bool = False,
     single_output: bool = False,
     stable_exp: float = None,
     return_kernels: bool = False,
@@ -215,7 +215,7 @@ def _scaled_dot_product_attention_step(
             attention. May be 2D or 3D; see Shape section for details.
         dropout_p: dropout probability. If greater than 0.0, dropout is applied.
         use_conv: Indicates whether to apply a convolution layer over the value input or not. Default=False
-        update_landmarks: Whether to update landmarks or not. Default=True
+        fixed_landmarks: Whether to update landmarks or not. Default=False
         single_output: Indicates which mode the attention step is done. Default=False
 
     Shape:
@@ -299,12 +299,12 @@ def _scaled_dot_product_attention_step(
         dim=1
     )
 
-    if update_landmarks:
+    if not fixed_landmarks:
         # Add the contribution of q_new, k_new to the landmarks
         q_tilde_new += torch.div(q_new, tokens_per_landmark)
         k_tilde_new += torch.div(k_new, tokens_per_landmark)
 
-    if update_landmarks and (iteration % tokens_per_landmark == 0):
+    if not fixed_landmarks and (iteration % tokens_per_landmark == 0):
         # Landmark changes
 
         # assert torch.allclose(q_tilde_new, Q[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2))
@@ -591,7 +591,8 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         batch_size=32,
         single_output_mode=False,
         single_output_forward=False,
-        query_index=None
+        query_index=None,
+        fixed_landmarks=False
     ) -> None:
         assert single_output_mode >= single_output_forward # single_output_forward can only be True when single_output_mode is
 
@@ -601,13 +602,17 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             embed_dim,
             num_heads,
             num_landmarks,
+            batch_size,
             dropout,
             device,
             dtype,
             forward_returns_attn_mask,
-            single_output_forward
+            single_output_forward,
+            fixed_landmarks,
         )
 
+        self.batch_size = batch_size
+        self.num_landmarks = num_landmarks
         self.embed_dim_second = embed_dim_second
         self.single_output_mode = single_output_mode
         self.single_output_forward = single_output_forward
@@ -615,9 +620,19 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
 
         if init_mem:
             torch.set_default_device(device=device)
-            state = _scaled_dot_product_attention_default_state(batch_size, sequence_len, embed_dim, num_heads, num_landmarks)
-            self.set_state(state)
+            self.state = _scaled_dot_product_attention_default_state(batch_size, sequence_len, embed_dim, num_heads, num_landmarks)
             torch.set_default_device(device="cpu")
+
+    def fix_landmarks(self, q_data, k_data=None, alg="kmeans", kmeans_attempts=10, seed=0):
+        q_tilde, k_tilde, Gamma_D, Gamma_D_inv = (
+            NystromMultiheadAttention.fix_landmarks(self, q_data, k_data, alg=alg, kmeans_attempts=kmeans_attempts, seed=seed))
+
+        state = list(self.state)
+        state[0] = q_tilde
+        state[1] = k_tilde
+        state[6] = Gamma_D
+        state[12] = Gamma_D_inv
+        self.state = tuple(state)
 
     def forward(self, query, key=None, value=None):
         if not self.single_output_forward or not self.single_output_mode:
@@ -666,11 +681,11 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             value = query
 
         o, new_state = _scaled_dot_product_attention_step(
-            self.get_state(), query, key, value, single_output=self.single_output_mode
+            self.state, query, key, value, single_output=self.single_output_mode, fixed_landmarks=self.fixed_landmarks
         )
 
         if update_state:
-            self.set_state(new_state)
+            self.state = new_state
 
         if isinstance(o, Tensor) and self.embed_dim_second:
             o = o.transpose(1, 2)

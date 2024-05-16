@@ -1,10 +1,12 @@
 import torch
-import warnings
+from continual.logging import getLogger
 
 # OVERFLOW_VALUE = 88.
 # UNDERFLOW_VALUE = -103.
 OVERFLOW_VALUE = 80.
 UNDERFLOW_VALUE = -95.
+
+logger_once = getLogger(__name__, log_once=True)
 
 # Generic qk_product
 def qk_product(q, k, stable_exp=None):
@@ -15,9 +17,9 @@ def qk_product(q, k, stable_exp=None):
 
     matrix = torch.exp(matrix)
     if torch.any(torch.isinf(matrix)):
-        warnings.warn("qk product produces overflow infinite after exponential")
+        logger_once.warn("qk product produces overflow infinite after exponential")
     elif torch.all(matrix == 0):
-        warnings.warn("qk product produces underflow zeros after exponential")
+        logger_once.warn("qk product produces underflow zeros after exponential")
     return matrix
 
 # Makes a continual step removing the first column and row from M and adding a new column and row defined as:

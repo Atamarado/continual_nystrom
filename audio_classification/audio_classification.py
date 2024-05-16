@@ -453,9 +453,104 @@ def get_dataset(split, seed):
             pickle.dump(dataset, f)
         return dataset
 
+def fix_landmarks(model, dataset, config, layer_number=0, kmeans_attempts=10):
+    print("Computing and fixing landmarks for encoder layer number "+str(layer_number)+"...")
+
+    seed = config['model_seed']
+    total_layers = config['num_layers']
+    freeze_weights = config['freeze_weights']
+
+    assert layer_number < total_layers
+
+    features = dataset.features
+    features = torch.tensor(features)
+    features = torch.permute(features, (0, 2, 1))
+    features = features.cuda()
+
+    # TODO: Not very good code
+    if config['num_layers'] == 1:
+        nystrom_module = model[3][0][1]
+    elif layer_number == 0:
+        nystrom_module = model[3][0][0][0][1]
+    else:
+        nystrom_module = list(model[3][0][layer_number].children())[0][0][1]
+
+    if freeze_weights:
+        for param in model[:3].parameters():
+            param.requires_grad = False
+        if layer_number > 0 and total_layers > 1:
+            for param in model[3][0][:layer_number].parameters():
+                param.requires_grad = False
+
+        linear_q = nystrom_module.W_q
+        linear_k = nystrom_module.W_k
+        for linear_q_elem in linear_q:
+            for param in linear_q_elem.parameters():
+                param.requires_grad = False
+        for linear_k_elem in linear_k:
+            for param in linear_k_elem.parameters():
+                param.requires_grad = False
+
+    with torch.no_grad():
+        features = model[:3](features)
+        if layer_number > 0 and total_layers > 1:
+            features = model[3][0][:layer_number](features)
+
+    # Add the new landmarks
+    nystrom_module.fix_landmarks(features, kmeans_attempts=kmeans_attempts, seed=seed)
+    print("Finished fixing landmarks for encoder layer " + str(layer_number))
+
+def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criterion, train_loader, val_loader, writer, best_val_accuracy):
+    running_loss = 0.0
+    for i, data in enumerate(train_loader):
+        # load data
+        features, labels = data
+        features = torch.permute(features, (0, 2, 1))
+        features = features.cuda()
+        labels = labels.cuda()
+
+        # train the model
+        optimizer.zero_grad()
+
+        # with torch.autograd.detect_anomaly(check_nan=True):
+        predicted_labels = model(features)
+        predicted_labels = torch.squeeze(predicted_labels, dim=-1)
+        loss = criterion(predicted_labels, labels)
+        if torch.isnan(loss):
+            pass
+        loss.backward()
+        optimizer.step()
+
+        # update training metrics
+        running_loss += loss.item()
+
+    train_accuracy = calculate_accuracy(model, train_loader)
+    val_accuracy = calculate_accuracy(model, val_loader)
+
+    writer.add_scalar("Loss/train", running_loss, epoch_number)
+    writer.add_scalar("Accuracy/train", train_accuracy, epoch_number)
+    writer.add_scalar("Accuracy/val", val_accuracy, epoch_number)
+
+    improved = False
+    if val_accuracy >= best_val_accuracy:
+        best_val_accuracy = val_accuracy
+        improved = True
+        torch.save(model.state_dict(), get_model_path(config))
+
+    print('Epoch: %d/%d; Loss: %.2e; Train Acc: %.2f; Val Acc: %.2f%s' % (
+        epoch_number + 1,
+        total_epochs,
+        running_loss,
+        train_accuracy,
+        val_accuracy,
+        '; saved' if improved else ''
+    ))
+
+    return train_accuracy, best_val_accuracy
 
 def torch_train(config):
     assert config["model"] in ["base", "base_continual", "nystromformer", "continual_nystrom"]
+    assert config["num_layers"] >= len(config["fit_layer_epochs"])
 
     g = torch.Generator()
     g.manual_seed(config["data_seed"])
@@ -527,7 +622,8 @@ def torch_train(config):
                 num_heads=16,
                 num_layers=config['num_layers'],
                 dropout_rate=0.1,
-                num_landmarks=config['num_landmarks']
+                device="cuda:" + str(SELECTED_GPUS[0]),
+                num_landmarks=config['num_landmarks'],
             )
         case "continual_nystrom":
             model = CoNystromVisionTransformer(
@@ -541,7 +637,7 @@ def torch_train(config):
                 dropout_rate=0.1,
                 batch_size=config['batch_size'],
                 device="cuda:"+str(SELECTED_GPUS[0]),
-                num_landmarks=config['num_landmarks']
+                num_landmarks=config['num_landmarks'],
             )
 
     if torch.cuda.device_count() > 1:
@@ -556,53 +652,22 @@ def torch_train(config):
 
     writer = SummaryWriter()
 
+    total_epochs = config['epochs'] + sum(config['fit_layer_epochs'])
+
     # training loop
     best_val_accuracy = 0.0
     for epoch in range(config['epochs']):
-        running_loss = 0.0
-        for i, data in enumerate(train_loader):
-            # load data
-            features, labels = data
-            features = torch.permute(features, (0, 2, 1))
-            features = features.cuda()
-            labels = labels.cuda()
+        train_accuracy, best_val_accuracy = train_one_epoch(model, config, epoch, total_epochs, optimizer, criterion, train_loader, val_loader,
+                                            writer, best_val_accuracy)
 
-            # train the model
-            optimizer.zero_grad()
+    cum_epoch = config['epochs']
+    for num_layer, num_epochs_fit in enumerate(config['fit_layer_epochs']):
+        fix_landmarks(model, train_dataset, config, layer_number=num_layer)
+        for _ in range(num_epochs_fit):
+            train_accuracy, best_val_accuracy = train_one_epoch(model, config, cum_epoch, total_epochs, optimizer, criterion, train_loader,
+                                                val_loader, writer, best_val_accuracy)
+            cum_epoch += 1
 
-            #with torch.autograd.detect_anomaly(check_nan=True):
-            predicted_labels = model(features)
-            predicted_labels = torch.squeeze(predicted_labels, dim=-1)
-            loss = criterion(predicted_labels, labels)
-            if torch.isnan(loss):
-                pass
-            loss.backward()
-            optimizer.step()
-
-            # update training metrics
-            running_loss += loss.item()
-
-        train_accuracy = calculate_accuracy(model, train_loader)
-        val_accuracy = calculate_accuracy(model, val_loader)
-
-        writer.add_scalar("Loss/train", running_loss, epoch)
-        writer.add_scalar("Accuracy/train", train_accuracy, epoch)
-        writer.add_scalar("Accuracy/val", val_accuracy, epoch)
-
-        improved = False
-        if val_accuracy >= best_val_accuracy:
-            best_val_accuracy = val_accuracy
-            improved = True
-            torch.save(model.state_dict(), get_model_path(config))
-
-        print('Epoch: %d/%d; Loss: %.2e; Train Acc: %.2f; Val Acc: %.2f%s' % (
-            epoch + 1,
-            config['epochs'],
-            running_loss,
-            train_accuracy,
-            val_accuracy,
-            '; saved' if improved else ''
-        ))
     writer.flush()
     writer.close()
 
@@ -745,6 +810,8 @@ if __name__ == "__main__":
     head_flops = get_tf_flops(head_model)
     print('Head: params %.2fM; FLOPS %.2fM' % (head_params / 10 ** 6, head_flops / 10 ** 6))
 
+    FILENAME = 'results_dummy.txt'
+
     torch_config = {
         'batch_size': 32,
         'lr': 1e-5,
@@ -752,19 +819,25 @@ if __name__ == "__main__":
         'epochs': 50,
         'version': 'v5',
         'num_layers': 1,
-        'model': 'nystromformer'
+        'model': 'nystromformer',
+        'num_landmarks': 10,
+        'fit_layer_epochs': [5],
+        'freeze_weights': True,
     }
-    # evaluate_config(torch_config, filename="results_conystrom3.txt")
+    evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
 
     torch_config["num_layers"] = 2
-    evaluate_config(torch_config, filename="results_conystrom3.txt")
+    torch_config['fit_layer_epochs'] = [5, 5]
+    evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
 
     torch_config["num_layers"] = 1
+    torch_config['fit_layer_epochs'] = [5]
     torch_config["model"] = "continual_nystrom"
-    evaluate_config(torch_config, filename="results_conystrom3.txt")
+    evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
 
     torch_config["num_layers"] = 2
-    evaluate_config(torch_config, filename="results_conystrom3.txt")
+    torch_config['fit_layer_epochs'] = [5, 5]
+    evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
 
         # torch_config = {
         #     'batch_size': 32,

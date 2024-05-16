@@ -197,17 +197,20 @@ def test_scaled_dot_product_attention_step():
     g = torch.Generator()
     g.manual_seed(0)
 
-    std = 10
+    std = 1
     query1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
     key1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
     value1 = torch.empty((B, N, E)).normal_(mean=0, std=std, generator=g)
 
-    target1, kernel1, kernel2, kernel3 = _scaled_dot_product_attention(query1, key1, value1, m, return_kernels=True)
-    #target1, kernel1, kernel2, kernel3 = nystromformer_exp(query1, key1, value1, m, state_mode=False)
-
     # Now, let's try from zero-init
     state = _scaled_dot_product_attention_default_state(B, N, E, H, m)
-    # state = compute_landmarks(state, query1, key1, m)
+    state = compute_landmarks(state, query1, key1, m)
+
+    q_tilde = state[0]
+    k_tilde = state[1]
+
+    target1, kernel1, kernel2, kernel3 = _scaled_dot_product_attention(query1, key1, value1, m, return_kernels=True, q_landmarks=q_tilde, k_landmarks=k_tilde)
+    #target1, kernel1, kernel2, kernel3 = nystromformer_exp(query1, key1, value1, m, state_mode=False)
     # state = nystromformer_exp(query1, key1, value1, m, stable_exp=True, state_mode=True)
 
     quantile = 0.65
@@ -217,11 +220,11 @@ def test_scaled_dot_product_attention_step():
     for i in range(N):
         if i==N-1:
             output_step, state, Beta, Gamma, Delta = _scaled_dot_product_attention_step(
-                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=True, update_landmarks=True, stable_exp=True, maximum_exp=maximum_exp, single_output=True
+                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=True, fixed_landmarks=True
             )
         else:
             output_step, state = _scaled_dot_product_attention_step(
-                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=False, update_landmarks=True, stable_exp=True, maximum_exp=maximum_exp, single_output=True
+                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=False, fixed_landmarks=True
             )
 
     print("\n\nStd, "+str(std))
