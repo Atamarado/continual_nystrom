@@ -740,7 +740,8 @@ def torch_train(config):
         "val_accuracy": best_val_accuracy,
         "test_accuracy": test_accuracy,
     }
-    with open(get_model_path(config, "raw_results", False, extension="pkl"), 'rb') as f:
+    dump_file_path = get_model_path(config, "raw_results", False, extension="pkl")
+    with open(dump_file_path, 'wb') as f:
         pickle.dump(output_content, f)
 
     return model, train_accuracy, best_val_accuracy, test_accuracy
