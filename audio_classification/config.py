@@ -1,9 +1,6 @@
 import argparse
 import ast
 
-def str2bool(string):
-    return True if string.lower() == "true" else False
-
 def get_args_parser():
     parser = argparse.ArgumentParser("Audio classification config", add_help=False)
     parser.add_argument("--batch_size", default=32, type=int)
@@ -16,7 +13,8 @@ def get_args_parser():
                         help='[base, base_continual, nystromformer, continual_nystrom]')
     parser.add_argument("--num_landmarks", default=10, type=int)
     parser.add_argument("--fit_layer_epochs", default=[], type=ast.literal_eval)
-    parser.add_argument("--freeze_weights", default=True, type=ast.literal_eval)
+    parser.add_argument("--freeze_weights", default="both", type=str,
+                        help='[both, true, false]')
 
     parser.add_argument("--data_seed", default=0, type=int)
     parser.add_argument("--model_seed", default=0, type=int)

@@ -9,6 +9,7 @@ import torch.optim as optim
 import torch.nn as nn
 assert torch.cuda.is_available()
 
+import pickle
 import argparse
 import gdown
 import urllib.request
@@ -422,25 +423,27 @@ def calculate_accuracy(model, data_loader):
     return accuracy
 
 MODEL_FOLDER = "saved_models"
-def get_model_path(config, fixed_landmarks=True):
+def get_model_path(config, folder=MODEL_FOLDER, fixed_landmarks=True, freeze_weights=True, extension="pth"):
     if config.model in ['base', 'base_continual'] or not fixed_landmarks:
-        return '%s/%s_%d_layers_seeds_%d_%d.pth' % (
-            MODEL_FOLDER,
+        return '%s/%s_%d_layers_seeds_%d_%d.%s' % (
+            folder,
             config.model,
             config.num_layers,
             config.model_seed,
-            config.data_seed
+            config.data_seed,
+            extension
         )
     else:
-        return '%s/%s_%d_layers_%d_landmarks_%s_%d_seeds_%d_%d.pth' % (
-            MODEL_FOLDER,
+        return '%s/%s_%d_layers_%d_landmarks_%s_%d_seeds_%d_%d.%s' % (
+            folder,
             config.model,
             config.num_layers,
             config.num_landmarks,
             config.fit_layer_epochs,
-            config.freeze_weights,
+            freeze_weights,
             config.model_seed,
-            config.data_seed
+            config.data_seed,
+            extension
         )
 
 def seed_worker(_):
@@ -465,12 +468,11 @@ def get_dataset(split, seed):
             pickle.dump(dataset, f)
         return dataset
 
-def fix_landmarks(model, dataset, config, layer_number=0, kmeans_attempts=10):
+def fix_landmarks(model, dataset, config, freeze_weights=True, layer_number=0, kmeans_attempts=10):
     print("Computing and fixing landmarks for encoder layer number "+str(layer_number)+"...")
 
     seed = config.model_seed
     total_layers = config.num_layers
-    freeze_weights = config.freeze_weights
 
     assert layer_number < total_layers
 
@@ -512,7 +514,35 @@ def fix_landmarks(model, dataset, config, layer_number=0, kmeans_attempts=10):
     nystrom_module.fix_landmarks(features, kmeans_attempts=kmeans_attempts, seed=seed)
     print("Finished fixing landmarks for encoder layer " + str(layer_number))
 
-def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criterion, train_loader, val_loader, writer, best_val_accuracy):
+def train_fixed_landmarks(model, config, out_file, train_dataset, optimizer, criterion, train_loader, val_loader, test_loader, writer, best_val_accuracy, freeze_weights=True):
+    total_epochs = config.epochs + sum(config.fit_layer_epochs)
+    cum_epoch = config.epochs
+    for num_layer, num_epochs_fit in enumerate(config.fit_layer_epochs):
+        fix_landmarks(model, train_dataset, config, freeze_weights=freeze_weights, layer_number=num_layer)
+        for _ in range(num_epochs_fit):
+            train_accuracy, best_val_accuracy = train_one_epoch(model, config, cum_epoch, total_epochs, optimizer,
+                                                                criterion, train_loader, val_loader, writer,
+                                                                best_val_accuracy, fixed_landmarks=True)
+            cum_epoch += 1
+
+    # Reload best model for test
+    model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=True, freeze_weights=freeze_weights)))
+
+    if config.model == "continual_nystrom":
+        model[3].call_mode = "forward_steps"
+    test_accuracy = calculate_accuracy(model, test_loader)
+
+    output_content = {
+        "config": config,
+        "freeze_weights": freeze_weights,
+        "train_accuracy": train_accuracy,
+        "val_accuracy": best_val_accuracy,
+        "test_accuracy": test_accuracy,
+    }
+    with open(out_file, 'rb') as f:
+        pickle.dump(output_content, f)
+
+def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criterion, train_loader, val_loader, writer, best_val_accuracy, fixed_landmarks=False):
     running_loss = 0.0
     for i, data in enumerate(train_loader):
         # load data
@@ -547,7 +577,7 @@ def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criter
     if val_accuracy >= best_val_accuracy:
         best_val_accuracy = val_accuracy
         improved = True
-        torch.save(model.state_dict(), get_model_path(config))
+        torch.save(model.state_dict(), get_model_path(config, fixed_landmarks=fixed_landmarks))
 
     print('Epoch: %d/%d; Loss: %.2e; Train Acc: %.2f; Val Acc: %.2f%s' % (
         epoch_number + 1,
@@ -562,6 +592,7 @@ def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criter
 
 def torch_train(config):
     assert config.model in ["base", "base_continual", "nystromformer", "continual_nystrom"]
+    assert config.freeze_weights in ["both", "true", "false"]
     assert config.num_layers >= len(config.fit_layer_epochs)
 
     g = torch.Generator()
@@ -670,25 +701,47 @@ def torch_train(config):
     best_val_accuracy = 0.0
     for epoch in range(config.epochs):
         train_accuracy, best_val_accuracy = train_one_epoch(model, config, epoch, total_epochs, optimizer, criterion, train_loader, val_loader,
-                                            writer, best_val_accuracy)
+                                            writer, best_val_accuracy, fixed_landmarks=False)
 
-    cum_epoch = config.epochs
-    for num_layer, num_epochs_fit in enumerate(config.fit_layer_epochs):
-        fix_landmarks(model, train_dataset, config, layer_number=num_layer)
-        for _ in range(num_epochs_fit):
-            train_accuracy, best_val_accuracy = train_one_epoch(model, config, cum_epoch, total_epochs, optimizer, criterion, train_loader,
-                                                val_loader, writer, best_val_accuracy)
-            cum_epoch += 1
+    if config.model not in ['base', 'base_continual']:
+        if config.freeze_weights == "both":
+            # Copy current state of the model
+            torch.save(model.state_dict(), get_model_path(config, fixed_landmarks=False, extension="ptht"))
+
+        if config.freeze_weights in ["true", "both"]:
+            train_fixed_landmarks(model, config,
+                                  get_model_path(config, "raw_results", True, True, "pkl"),
+                                  train_dataset, optimizer, criterion, train_loader, val_loader,
+                                  test_loader, writer, best_val_accuracy.copy(), freeze_weights=True)
+
+        if config.freeze_weights == "both":
+            model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False, extension="ptht")))
+
+        if config.freeze_weights in ["false", "both"]:
+            train_fixed_landmarks(model, config,
+                                  get_model_path(config, "raw_results", True, False, "pkl"),
+                                  train_dataset, optimizer, criterion, train_loader, val_loader,
+                                  test_loader, writer, best_val_accuracy.copy(), freeze_weights=False)
 
     writer.flush()
     writer.close()
 
     # Reload best model for test
-    model.load_state_dict(torch.load(get_model_path(config)))
+    model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False)))
 
     if config.model == "continual_nystrom":
         model[3].call_mode = "forward_steps"
     test_accuracy = calculate_accuracy(model, test_loader)
+
+    output_content = {
+        "config": config,
+        "freeze_weights": None,
+        "train_accuracy": train_accuracy,
+        "val_accuracy": best_val_accuracy,
+        "test_accuracy": test_accuracy,
+    }
+    with open(get_model_path(config, "raw_results", False, extension="pkl"), 'rb') as f:
+        pickle.dump(output_content, f)
 
     return model, train_accuracy, best_val_accuracy, test_accuracy
 
