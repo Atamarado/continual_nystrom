@@ -35,7 +35,8 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
             dtype=torch.float32,
             forward_returns_attn_mask=False,
             single_output_forward=False,
-            fixed_landmarks=False
+            fixed_landmarks=False,
+            compute_inverse=True
     ):
         super().__init__(embed_dim, num_heads)
 
@@ -55,6 +56,7 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
         self.ff = nn.Linear(self.embed_dim, self.embed_dim)
 
         self.fixed_landmarks = fixed_landmarks
+        self.compute_inverse = compute_inverse
 
     def fix_landmarks(self, q_data, k_data=None, alg="base", kmeans_attempts=10, seed=0):
         device = q_data.device
@@ -154,12 +156,14 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
                                                      q_landmarks=self.q_tilde,
                                                      k_landmarks=self.k_tilde,
                                                      kernel_2=self.kernel_2,
+                                                     compute_inverse=self.compute_inverse,
                                                      )
         else:
             attn_out = _scaled_dot_product_attention(query, key, value,
                                                      self.num_landmarks,
                                                      dropout_p=self.dropout,
-                                                     single_output_forward=single_output_forward
+                                                     single_output_forward=single_output_forward,
+                                                     compute_inverse=self.compute_inverse,
                                                      )
 
         if single_output_forward:
@@ -222,6 +226,7 @@ def _scaled_dot_product_attention(
     q_landmarks=None,
     k_landmarks=None,
     kernel_2=None,
+    compute_inverse: bool = True,
 ) -> Tuple[Tensor]:
     r"""
     Computes scaled dot product attention as in Nyströmformer on query, key and value tensors, using
@@ -289,7 +294,9 @@ def _scaled_dot_product_attention(
 
         kernel_1 = torch.nn.functional.softmax(torch.bmm(q, k_landmarks.transpose(-1, -2)), dim=-1)
         if kernel_2 is None:
-            kernel_2 = iterative_inv(torch.nn.functional.softmax(torch.bmm(q_landmarks, k_landmarks.transpose(-1, -2)), dim=-1))
+            kernel_2 = torch.nn.functional.softmax(torch.bmm(q_landmarks, k_landmarks.transpose(-1, -2)), dim=-1)
+            if compute_inverse:
+                kernel_2 = 1./iterative_inv(kernel_2)
         kernel_3 = torch.nn.functional.softmax(torch.bmm(q_landmarks, k.transpose(-1, -2)), dim=-1)  # - 1e9 * (1 - mask[:, None, None, :]), dim = -1)
         output = torch.bmm(torch.bmm(kernel_1, kernel_2), torch.bmm(kernel_3, v))
 

@@ -204,6 +204,7 @@ def _scaled_dot_product_attention_step(
     single_output: bool = False,
     stable_exp: float = None,
     return_kernels: bool = False,
+    compute_inverse: bool = True,
 ) -> Tuple[Tensor, State]:
     """
     Computes the Continual Retroactive Scaled Nyströmformer Dot-Product Attention on query, key and value tensors.
@@ -312,7 +313,7 @@ def _scaled_dot_product_attention_step(
         d_Gamma = add_continual_vector(d_Gamma, d_Gamma_new, dim=1)
         d_Gamma_prev = d_Gamma
 
-        Gamma_D = iterative_inv(odot(d_Gamma, Gamma))
+        Gamma_D = iterative_inv(odot(d_Gamma, Gamma)) if compute_inverse else 1./odot(d_Gamma, Gamma)
 
         # Beta, d_Beta update
         Beta_B = qk_product(q_new, K_tilde, stable_exp=stable_exp)
@@ -517,7 +518,8 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         single_output_mode=False,
         single_output_forward=False,
         query_index=None,
-        fixed_landmarks=False
+        fixed_landmarks=False,
+        compute_inverse=True
     ) -> None:
         assert single_output_mode >= single_output_forward # single_output_forward can only be True when single_output_mode is
 
@@ -543,6 +545,7 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         self.single_output_mode = single_output_mode
         self.single_output_forward = single_output_forward
         self.query_index = query_index
+        self.compute_inverse = compute_inverse
 
         if init_mem:
             torch.set_default_device(device=device)
@@ -607,7 +610,10 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             value = query
 
         o, new_state = _scaled_dot_product_attention_step(
-            self.state, query, key, value, single_output=self.single_output_mode, fixed_landmarks=self.fixed_landmarks
+            self.state, query, key, value,
+            single_output=self.single_output_mode,
+            fixed_landmarks=self.fixed_landmarks,
+            compute_inverse=self.compute_inverse,
         )
 
         if update_state:

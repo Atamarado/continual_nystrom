@@ -86,7 +86,7 @@ def compute_flops_and_params(model, model_type, batch_size, input_dim, seq_len):
 
     return flops, params
 
-def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks=False, iterations=10):
+def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks=False, iterations=10, compute_inverse=True):
     # Model assertions
     assert M is None or M < N
     assert model_type in ['base', 'base_continual', 'nystromformer', 'continual_nystrom']
@@ -111,7 +111,8 @@ def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks
     # Refresh model
     model = init_model(model_type, layers, B, N, H, E, M, fixed_landmarks, data)
 
-    # TODO: Add behaviour with fixed landmarks (set states and landmark matrices)
+    if not compute_inverse and model_type in ['nystromformer', 'continual_nystrom']:
+        model[0][1].compute_inverse = False
 
     if model_type in ['base_continual', 'continual_nystrom']:
         model.call_mode = "forward_steps"
@@ -139,6 +140,6 @@ def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks
 
 if __name__ == '__main__':
     data = fetch_f1_data()
-    for model in ['nystromformer', 'continual_nystrom']: # ['base', 'base_continual', 'nystromformer', 'continual_nystrom']:
-        flops, params, running_time = evaluate_model(1000, 10, 16, 1, data, model, 1, M=11, fixed_landmarks=True, iterations=5)
+    for model in ['base', 'base_continual', 'nystromformer', 'continual_nystrom']:
+        flops, params, running_time = evaluate_model(1000, 200, 16, 1, data, model, 1, M=8, fixed_landmarks=True, iterations=5, compute_inverse=False)
         print("Model: "+model+". flops: "+str(flops)+". params: "+str(params)+". running_time: "+str(running_time))
