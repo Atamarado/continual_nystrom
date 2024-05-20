@@ -31,8 +31,8 @@ from models import NonCoVisionTransformer, CoVisionTransformer, CoNystromVisionT
 # os.chdir(ROOT_DIR)
 
 # Select a single GPU to perform the training
-SELECTED_GPUS = [0]
-os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(gpu_number) for gpu_number in SELECTED_GPUS])
+SELECTED_GPUS = ["3"]
+os.environ['CUDA_VISIBLE_DEVICES'] = SELECTED_GPUS[0]
 
 # Configure  GPUS
 tf.get_logger().setLevel('INFO')
@@ -412,8 +412,8 @@ def calculate_accuracy(model, data_loader):
         for i, data in enumerate(data_loader):
             features, labels = data
             features = torch.permute(features, (0, 2, 1))
-            features = features.cuda()
-            labels = labels.cuda()
+            features = features.to("cuda:"+str(SELECTED_GPUS[0]))
+            labels = labels.to("cuda:"+str(SELECTED_GPUS[0]))
             predicted_labels = model(features)
             predicted_labels = torch.squeeze(predicted_labels, dim=-1)
             correct_count += torch.sum(torch.argmax(predicted_labels, dim=1) == torch.argmax(labels, dim=1))
@@ -479,7 +479,7 @@ def fix_landmarks(model, dataset, config, freeze_weights=True, layer_number=0, k
     features = dataset.features
     features = torch.tensor(features)
     features = torch.permute(features, (0, 2, 1))
-    features = features.cuda()
+    features = features.to("cuda:"+str(SELECTED_GPUS[0]))
 
     # TODO: Not very good code
     if config.num_layers == 1:
@@ -529,7 +529,7 @@ def train_fixed_landmarks(model, config, out_file, train_dataset, optimizer, cri
     best_path = get_model_path(config, fixed_landmarks=True, freeze_weights=freeze_weights)
     if not os.path.exists(best_path):
         best_path = get_model_path(config, fixed_landmarks=False)
-    model.load_state_dict(torch.load(best_path))
+    model.load_state_dict(torch.load(best_path, map_location="cuda")) # .to("cuda:"+str(SELECTED_GPUS[0])))
 
     if config.model == "continual_nystrom":
         model[3].call_mode = "forward_steps"
@@ -551,8 +551,8 @@ def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criter
         # load data
         features, labels = data
         features = torch.permute(features, (0, 2, 1))
-        features = features.cuda()
-        labels = labels.cuda()
+        features = features.to("cuda:"+str(SELECTED_GPUS[0]))
+        labels = labels.to("cuda:"+str(SELECTED_GPUS[0]))
 
         # train the model
         optimizer.zero_grad()
@@ -688,9 +688,9 @@ def torch_train(config):
                 num_landmarks=config.num_landmarks,
             )
 
-    if torch.cuda.device_count() > 1:
-        model = nn.DataParallel(model)
-    model.cuda()
+    # if torch.cuda.device_count() > 1:
+    #     model = nn.DataParallel(model)
+    model = model.to("cuda:"+str(SELECTED_GPUS[0]))
 
     # optimizer and loss
     optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
@@ -720,7 +720,7 @@ def torch_train(config):
                                   test_loader, writer, best_val_accuracy, freeze_weights=True)
 
         if config.freeze_weights == "both":
-            model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False, extension="ptht")))
+            model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False, extension="ptht"), map_location="cuda")) # .to("cuda:"+str(SELECTED_GPUS[0])))
 
         if config.freeze_weights in ["false", "both"]:
             train_fixed_landmarks(model, config,
@@ -732,7 +732,7 @@ def torch_train(config):
     writer.close()
 
     # Reload best model for test
-    model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False)))
+    model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False), map_location="cuda")) # .to("cuda:"+str(SELECTED_GPUS[0])))
 
     if config.model == "continual_nystrom":
         model[3].call_mode = "forward_steps"
@@ -865,7 +865,7 @@ if __name__ == "__main__":
     # config.model_seed = 0
     # torch_train(config)
 
-    for data_seed in range(5):
+    for data_seed in [4]:
         config.data_seed = data_seed
         for model_seed in range(5):
             config.model_seed = model_seed
