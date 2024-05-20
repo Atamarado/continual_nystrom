@@ -5,9 +5,8 @@ import time
 import torch
 import types
 
-# from audio_classification.models import CoTransformerModel, CoNystromTransformerModel
-from models import CoTransformerModel, CoNystromTransformerModel
-from audio_classification import get_flops_and_params
+from audio_classification.models import CoTransformerModel, CoNystromTransformerModel
+from flops import get_flops_and_params
 
 def min_max_normalize(matrix):
     # Get the minimum and maximum values for each column
