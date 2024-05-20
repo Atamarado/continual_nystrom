@@ -172,6 +172,14 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
     def split_heads(self, X):
         return X.reshape(X.size(0), X.size(1), self.num_head, self.head_dim)
 
+    def flops(self):
+        d = self.embed_dim
+        m = self.num_landmarks
+        n = self.sequence_len
+
+        f = 4*n*d*m + 2*n*d + n*(m**2) + 2*n*m + d*(m**2) + 24*(m**3) + 23*(m**2)
+        return f*self.num_head
+
 
 def get_landmarks(matrix, m):
     B, n, E = matrix.shape

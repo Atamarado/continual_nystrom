@@ -434,12 +434,13 @@ def get_model_path(config, folder=MODEL_FOLDER, fixed_landmarks=True, freeze_wei
             extension
         )
     else:
+        fit_layer_epochs = str(config.fit_layer_epochs).replace('[', '-').replace(']', '-')
         return '%s/%s_%d_layers_%d_landmarks_%s_%d_seeds_%d_%d.%s' % (
             folder,
             config.model,
             config.num_layers,
             config.num_landmarks,
-            config.fit_layer_epochs,
+            fit_layer_epochs,
             freeze_weights,
             config.model_seed,
             config.data_seed,
@@ -526,7 +527,10 @@ def train_fixed_landmarks(model, config, out_file, train_dataset, optimizer, cri
             cum_epoch += 1
 
     # Reload best model for test
-    model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=True, freeze_weights=freeze_weights)))
+    best_path = get_model_path(config, fixed_landmarks=True, freeze_weights=freeze_weights)
+    if not os.path.exists(best_path):
+        best_path = get_model_path(config, fixed_landmarks=False)
+    model.load_state_dict(torch.load(best_path))
 
     if config.model == "continual_nystrom":
         model[3].call_mode = "forward_steps"
@@ -539,7 +543,7 @@ def train_fixed_landmarks(model, config, out_file, train_dataset, optimizer, cri
         "val_accuracy": best_val_accuracy,
         "test_accuracy": test_accuracy,
     }
-    with open(out_file, 'rb') as f:
+    with open(out_file, 'wb') as f:
         pickle.dump(output_content, f)
 
 def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criterion, train_loader, val_loader, writer, best_val_accuracy, fixed_landmarks=False):
@@ -591,6 +595,8 @@ def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criter
     return train_accuracy, best_val_accuracy
 
 def torch_train(config):
+    print("\n\n\n" + str(config))
+
     assert config.model in ["base", "base_continual", "nystromformer", "continual_nystrom"]
     assert config.freeze_weights in ["both", "true", "false"]
     assert config.num_layers >= len(config.fit_layer_epochs)
@@ -712,7 +718,7 @@ def torch_train(config):
             train_fixed_landmarks(model, config,
                                   get_model_path(config, "raw_results", True, True, "pkl"),
                                   train_dataset, optimizer, criterion, train_loader, val_loader,
-                                  test_loader, writer, best_val_accuracy.copy(), freeze_weights=True)
+                                  test_loader, writer, best_val_accuracy, freeze_weights=True)
 
         if config.freeze_weights == "both":
             model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False, extension="ptht")))
@@ -721,7 +727,7 @@ def torch_train(config):
             train_fixed_landmarks(model, config,
                                   get_model_path(config, "raw_results", True, False, "pkl"),
                                   train_dataset, optimizer, criterion, train_loader, val_loader,
-                                  test_loader, writer, best_val_accuracy.copy(), freeze_weights=False)
+                                  test_loader, writer, best_val_accuracy, freeze_weights=False)
 
     writer.flush()
     writer.close()
@@ -746,19 +752,19 @@ def torch_train(config):
 
     return model, train_accuracy, best_val_accuracy, test_accuracy
 
-def get_flops_and_params(model, config):
+def get_flops_and_params(model, config, batch_size=1, input_dim=INPUT_DIM, seq_len=SEQ_LEN):
     if config.model in ["base_continual", "continual_nystrom"]:
-        warm_up_input = torch.randn(1, INPUT_DIM, SEQ_LEN)
+        warm_up_input = torch.randn(batch_size, input_dim, seq_len)
         model.to('cpu')
         assert next(model.parameters()).is_cuda == warm_up_input.is_cuda
         model.forward_steps(warm_up_input)  # Warm up model
         model.call_mode = "forward_step"
         flops, params = get_model_complexity_info(
-            model, (INPUT_DIM,), as_strings=False, print_per_layer_stat=False
+            model, (input_dim,), as_strings=False, print_per_layer_stat=False
         )
     else:
         flops, params = get_model_complexity_info(
-            model, (INPUT_DIM, SEQ_LEN), as_strings=False, print_per_layer_stat=False
+            model, (input_dim, seq_len), as_strings=False, print_per_layer_stat=False
         )
     return flops, params
 
@@ -867,8 +873,42 @@ if __name__ == "__main__":
         "Audio classification python program", parents=[get_args_parser()]
     )
     config = parser.parse_args()
-    model, train_accuracy, val_accuracy, test_accuracy = torch_train(config)
-    pass
+
+    # config.num_layers = 1
+    # config.model = "nystromformer"
+    # config.num_landmarks = 2
+    # config.fit_layer_epochs = [25]
+    # config.data_seed = 0
+    # config.model_seed = 0
+    # torch_train(config)
+
+    for data_seed in range(5):
+        config.data_seed = data_seed
+        for model_seed in range(5):
+            config.model_seed = model_seed
+            for model in ["base", "base_continual"]:
+                config.model = model
+                for num_layers in [1, 2]:
+                    config.num_layers = num_layers
+                    torch_train(config)
+            for model in ["nystromformer", "continual_nystrom"]:
+                config.model = model
+                for num_landmarks in [2, 4, 8, 16, 32, 64]:
+                    config.num_landmarks = num_landmarks
+
+                    config.num_layers = 1
+                    config.fit_layer_epochs = [25]
+                    torch_train(config)
+
+                    config.num_layers = 2
+                    config.fit_layer_epochs = [25, 25]
+                    torch_train(config)
+
+            config.fit_layer_epochs = []
+
+
+    # model, train_accuracy, val_accuracy, test_accuracy = torch_train(config)
+    # pass
 
     # tf_config = {
     #     'batch_size': 64,

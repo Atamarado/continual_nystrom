@@ -611,6 +611,7 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             fixed_landmarks,
         )
 
+        self.embed_dim = embed_dim
         self.batch_size = batch_size
         self.num_landmarks = num_landmarks
         self.embed_dim_second = embed_dim_second
@@ -690,7 +691,7 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         if isinstance(o, Tensor) and self.embed_dim_second:
             o = o.transpose(1, 2)
 
-        return o
+        return torch.flatten(o, 1, 2)
 
     def forward_steps(
         self,
@@ -727,44 +728,29 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
 
         return o
 
-    def flops(self, include_muls=True, include_adds=False, include_exps=False):
-        f = 0
+    def flops(self):
+        d = self.embed_dim
+        m = self.num_landmarks
+        n = self.sequence_len
 
-        # Linear projection
-        steps_taken = {
-            _callmode("forward"): self.sequence_len,
-            _callmode("forward_step"): 1,
-        }[self.call_mode]
+        ratio_updates = m/n
+        ratio_fixed = 1 - ratio_updates
 
-        f += (
-            steps_taken
-            * self.embed_dim
-            * self.embed_dim
-            * 3  # Assuming equal len for Q, K, and V
-        )
+        if self.call_mode == "forward":
+            return super().flops()
+        elif self.single_output_mode:
+            fixed_cost = 8*d*m + m**2 + 6*m
+            if self.fixed_landmarks:
+                f = fixed_cost
+            else:
+                continual_cost = n*d*m + 3*n*d + n + 14*d*m + 24*(m**3) + 23*(m**2) + 20*m
+                f = (ratio_updates*continual_cost) + (ratio_fixed*fixed_cost)
+        else:
+            fixed_cost = n*d*m + 8*d*m + m**2 + 8*m
+            if self.fixed_landmarks:
+                f = fixed_cost
+            else:
+                continual_cost = n*d*m + 6*n*d + 9*n + n*(m**2) + n*m + 13*d*m + 24*(m**3) + 22*m**2 + 17*m
+                f = (ratio_updates*continual_cost) + (ratio_fixed*fixed_cost)
 
-        if include_adds:
-            f += 3 * steps_taken * self.embed_dim * (self.embed_dim - 1)
-
-        if self.in_proj_bias is not None:
-            f += 3 * steps_taken * self.embed_dim
-
-            if include_adds:
-                f += 3 * steps_taken * self.embed_dim
-
-        # Multi-head Scaled Dot-Product Attention
-        f += self.num_heads * {
-            _callmode("forward"): scaled_dot_prod_attn_flops,
-            _callmode("forward_step"): retractive_scaled_dot_prod_attn_step_flops,
-        }[self.call_mode](
-            self.sequence_len,
-            self.embed_dim // self.num_heads,
-            include_muls,
-            include_adds,
-            include_exps,
-        )
-
-        # Linear projection
-        f += self.sequence_len * self.embed_dim * (self.embed_dim + 1)
-
-        return f
+        return f*self.num_head
