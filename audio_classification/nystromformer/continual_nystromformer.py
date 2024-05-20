@@ -400,6 +400,8 @@ def _scaled_dot_product_attention_step(
     # Operations common to both branches
     if single_output:
         output = torch.bmm(Beta_D_Gamma_D_new, DeltaD_V)
+        # Update dummy state
+        BetaD_GammaD = BetaD_GammaD_prev
     else:
         output = torch.bmm(BetaD_GammaD, DeltaD_V)
 
