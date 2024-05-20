@@ -26,16 +26,10 @@ def qk_product(q, k, stable_exp=None):
 # [M a]
 # [b c]
 def continual_matrix_concat(M, a, b):
-    return torch.cat((
-            torch.cat((
-                M,
-                a
-                ),
-                dim=2
-            ),
-            b
-        ),
-        dim=1
+    return add_continual_vector(
+        add_continual_vector(M, a, dim=2),
+        b,
+        dim=1,
     )
 
 # Computes the pseudo-inverse of a matrix with the iterative method. See Nyströmformer paper for more details
@@ -55,3 +49,11 @@ def odot(d_M, M):
     M = M / d_M
     # Replace all zero-divisions by zero
     return torch.nan_to_num(M, posinf=0.0, neginf=0.0)
+
+def add_continual_vector(matrix, new_vector, dim=1):
+    matrix = torch.roll(matrix, -1, dims=dim)
+    if dim == 1:
+        matrix[:, -1:] = new_vector
+    elif dim == 2:
+        matrix[:, :, -1:] = new_vector
+    return matrix

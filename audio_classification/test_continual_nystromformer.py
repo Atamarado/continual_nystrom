@@ -53,15 +53,15 @@ def nystromformer_exp(q, k, v, m, stable_exp=None, state_mode=False):
             k,
             v,
 
-            BetaD_GammaD[:, 1:],
+            BetaD_GammaD,
             Gamma_D_inv,
             d_Delta,
             DeltaV,
 
-            d_Beta[:, 1:],
-            d_Gamma[:, 1:],
-            Beta[:, 1:, 1:],
-            Gamma[:, 1:, 1:],
+            d_Beta,
+            d_Gamma,
+            Beta,
+            Gamma,
 
             torch.zeros((B, 1, E), device=device),
             torch.zeros((B, 1, E), device=device),
@@ -89,14 +89,14 @@ def compute_landmarks(state: State, q, k, m):
         K,
         V,
 
-        BetaD_GammaD_mem,
+        BetaD_GammaD_prev,
         _, # Gamma_D
         d_Delta_prev,
         DeltaV_prev,
 
         d_Beta_prev,
         _, # d_Gamma_prev
-        Beta_mem,
+        Beta_prev,
         _, # Gamma_mem
 
         q_tilde_new,
@@ -125,15 +125,15 @@ def compute_landmarks(state: State, q, k, m):
         K,
         V,
 
-        BetaD_GammaD_mem,
+        BetaD_GammaD_prev,
         Gamma_D_inv,
         d_Delta_prev,
         DeltaV_prev,
 
         d_Beta_prev,
-        d_Gamma[:, 1:],
-        Beta_mem,
-        Gamma[:, 1:, 1:],
+        d_Gamma,
+        Beta_prev,
+        Gamma,
 
         q_tilde_new,
         k_tilde_new,
@@ -208,8 +208,10 @@ def test_scaled_dot_product_attention_step():
 
     q_tilde = state[0]
     k_tilde = state[1]
+    kernel2 = state[6]
 
-    target1, kernel1, kernel2, kernel3 = _scaled_dot_product_attention(query1, key1, value1, m, return_kernels=True, q_landmarks=q_tilde, k_landmarks=k_tilde)
+    target1, kernel1, kernel2, kernel3 = _scaled_dot_product_attention(query1, key1, value1, m, return_kernels=True,
+                                                                       q_landmarks=q_tilde, k_landmarks=k_tilde, kernel_2=kernel2)
     #target1, kernel1, kernel2, kernel3 = nystromformer_exp(query1, key1, value1, m, state_mode=False)
     # state = nystromformer_exp(query1, key1, value1, m, stable_exp=True, state_mode=True)
 
@@ -220,11 +222,11 @@ def test_scaled_dot_product_attention_step():
     for i in range(N):
         if i==N-1:
             output_step, state, Beta, Gamma, Delta = _scaled_dot_product_attention_step(
-                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=True, fixed_landmarks=True
+                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=True, fixed_landmarks=False
             )
         else:
             output_step, state = _scaled_dot_product_attention_step(
-                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=False, fixed_landmarks=True
+                state, query1[:, i], key1[:, i], value1[:, i], return_kernels=False, fixed_landmarks=False
             )
 
     print("\n\nStd, "+str(std))
