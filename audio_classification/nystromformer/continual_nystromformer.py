@@ -291,18 +291,8 @@ def _scaled_dot_product_attention_step(
     if not fixed_landmarks and (iteration % tokens_per_landmark == 0):
         # Landmark changes
 
-        # assert torch.allclose(q_tilde_new, Q[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2))
-        # assert torch.allclose(k_tilde_new, K[:, -tokens_per_landmark:].mean(dim=-2).unsqueeze(-2))
-
         k_tilde_old = K_tilde[:, 0].unsqueeze(dim=-2)
-
-        # Q_mem = Q[:, :-1]
-
-        Q_tilde_mem = Q_tilde[:, 1:]
-        # K_tilde_mem = K_tilde[:, 1:]
-
         Q_tilde_prev = Q_tilde
-        # K_tilde_prev = K_tilde
 
         # Update Q_tilde, K_tilde
         Q_tilde = add_continual_vector(Q_tilde, q_tilde_new, dim=1)
