@@ -17,7 +17,6 @@ from continual.multihead_attention import (
     SingleOutputMultiheadAttention,
 )
 
-from .nystromformer import NystromMultiheadAttention
 from .continual_nystromformer import ContinualNystromMultiheadAttention
 
 __all__ = [
@@ -429,7 +428,8 @@ def SingleOutputNystromTransformerEncoderLayer(
     sequence_len: int = None,
     single_output_forward=False,
     query_index: int = -1,
-    batch_size=32
+    batch_size=32,
+    fixed_landmarks=False,
 ):
     """Continual Single-output Transformer Encoder layer.
 
@@ -500,7 +500,8 @@ def SingleOutputNystromTransformerEncoderLayer(
         batch_size=batch_size,
         single_output_mode=True,
         single_output_forward=single_output_forward,
-        query_index=query_index
+        query_index=query_index,
+        fixed_landmarks=fixed_landmarks,
     )
 
     ff = Sequential(
@@ -573,7 +574,8 @@ def RetroactiveNystromTransformerEncoderLayer(
     device=None,
     dtype=None,
     sequence_len: int = None,
-    batch_size=32
+    batch_size=32,
+    fixed_landmarks: bool = False,
 ):
     """Continual Retroactive Transformer Encoder layer.
 
@@ -641,6 +643,7 @@ def RetroactiveNystromTransformerEncoderLayer(
         batch_size=batch_size,
         single_output_mode=False,
         single_output_forward=False,
+        fixed_landmarks=fixed_landmarks
     )
 
     ff = Sequential(
@@ -789,6 +792,7 @@ def NystromTransformerEncoderLayerFactory(
     dtype=None,
     sequence_len: int = None,
     batch_size: int = 32,
+    fixed_landmarks: bool = False,
 ) -> Callable[[MhaType], Sequential]:
     """Defines the hyper-parameters of Continual Transformer Encoder layers, where each layer
     contains feed forward networks and continual multi-head attentions as proposed by
@@ -852,7 +856,8 @@ def NystromTransformerEncoderLayerFactory(
             device,
             dtype,
             sequence_len,
-            batch_size=batch_size
+            batch_size=batch_size,
+            fixed_landmarks=fixed_landmarks
         )
 
     return TransformerEncoderLayer

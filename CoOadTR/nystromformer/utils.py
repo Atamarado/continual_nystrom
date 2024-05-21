@@ -1,10 +1,12 @@
 import torch
-import warnings
+from continual.logging import getLogger
 
 # OVERFLOW_VALUE = 88.
 # UNDERFLOW_VALUE = -103.
 OVERFLOW_VALUE = 80.
 UNDERFLOW_VALUE = -95.
+
+logger_once = getLogger(__name__, log_once=True)
 
 # Generic qk_product
 def qk_product(q, k, stable_exp=None):
@@ -15,25 +17,19 @@ def qk_product(q, k, stable_exp=None):
 
     matrix = torch.exp(matrix)
     if torch.any(torch.isinf(matrix)):
-        warnings.warn("qk product produces overflow infinite after exponential")
+        logger_once.warn("qk product produces overflow infinite after exponential")
     elif torch.all(matrix == 0):
-        warnings.warn("qk product produces underflow zeros after exponential")
+        logger_once.warn("qk product produces underflow zeros after exponential")
     return matrix
 
 # Makes a continual step removing the first column and row from M and adding a new column and row defined as:
 # [M a]
 # [b c]
 def continual_matrix_concat(M, a, b):
-    return torch.cat((
-            torch.cat((
-                M,
-                a
-                ),
-                dim=2
-            ),
-            b
-        ),
-        dim=1
+    return add_continual_vector(
+        add_continual_vector(M, a, dim=2),
+        b,
+        dim=1,
     )
 
 # Computes the pseudo-inverse of a matrix with the iterative method. See Nyströmformer paper for more details
@@ -53,3 +49,11 @@ def odot(d_M, M):
     M = M / d_M
     # Replace all zero-divisions by zero
     return torch.nan_to_num(M, posinf=0.0, neginf=0.0)
+
+def add_continual_vector(matrix, new_vector, dim=1):
+    matrix = torch.roll(matrix, -1, dims=dim)
+    if dim == 1:
+        matrix[:, -1:] = new_vector
+    elif dim == 2:
+        matrix[:, :, -1:] = new_vector
+    return matrix
