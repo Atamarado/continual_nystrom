@@ -70,12 +70,12 @@ def _scaled_dot_product_attention_default_state(
 
         init_fn((B, n, m)),
         init_fn((B, m, m)),
-        torch.full((B, m, 1), n),  # init_fn((B, m, 1))
+        torch.full((B, m, 1), n, dtype=torch.float32),  # init_fn((B, m, 1))
         init_fn((B, m, d)),
 
         init_fn(B, n, 1),
         init_fn(B, m, 1),
-        init_fn(B, n, m),
+        torch.full((B, n, m), 1., dtype=torch.float32),
         init_fn(B, m, m),
 
         init_fn(B, 1, d),
@@ -383,7 +383,7 @@ def _scaled_dot_product_attention_step(
         # Delta^D odot
         DeltaD_V = odot(d_Delta, Delta_V)
 
-        # Update Beta_mem and d_Beta_mem
+        # Update Beta_prev and d_Beta_prev
         if not single_output:
             Beta_prev = add_continual_vector(Beta_prev, Beta_new, dim=1)
             d_Beta_prev = add_continual_vector(d_Beta_prev, d_Beta_new)
