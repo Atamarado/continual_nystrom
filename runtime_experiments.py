@@ -4,6 +4,7 @@ import numpy as np
 import time
 import torch
 import types
+import math
 
 from audio_classification.models import CoTransformerModel, CoNystromTransformerModel
 from flops import get_flops_and_params
@@ -137,9 +138,46 @@ def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks
 
     return flops, params, running_time
 
-
+N_ITERATIONS = 10
 if __name__ == '__main__':
     data = fetch_f1_data()
-    for model in ['base', 'base_continual', 'nystromformer', 'continual_nystrom']:
-        flops, params, running_time = evaluate_model(1000, 200, 16, 1, data, model, 1, M=8, fixed_landmarks=True, iterations=5, compute_inverse=False)
-        print("Model: "+model+". flops: "+str(flops)+". params: "+str(params)+". running_time: "+str(running_time))
+
+    result_list = []
+    for N in range(100, 1001, 25):
+        for E in range(25, 201, 25):
+            for num_layers in [1, 2]:
+                for model in ['base', 'base_continual']:
+                    flops, params, running_time = evaluate_model(N, E, 16, 1, data, model, num_layers, iterations=N_ITERATIONS)
+                    results = {'N': N,
+                               'E': E,
+                               'num_layers': num_layers,
+                               'model': model,
+                               'M': 0,
+                               'fixed_landmarks': False,
+                               'compute_inverse': False,
+                               'flops': flops,
+                               'params': params,
+                               'running_time': running_time}
+                    result_list.append(results)
+                for model in ['nystromformer', 'continual_nystrom']:
+                    for M in [2**i for i in range(1, math.ceil(math.log2(N)))]:
+                        for fixed_landmarks in [True, False]:
+                            for compute_inverse in [True, False]:
+                                flops, params, running_time = evaluate_model(N, E, 16, 1, data, model, 1,
+                                                                             M=M,
+                                                                             fixed_landmarks=fixed_landmarks,
+                                                                             iterations=N_ITERATIONS,
+                                                                             compute_inverse=compute_inverse)
+                                results = {'N': N,
+                                           'E': E,
+                                           'num_layers': num_layers,
+                                           'model': model,
+                                           'M': M,
+                                           'fixed_landmarks': fixed_landmarks,
+                                           'compute_inverse': compute_inverse,
+                                           'flops': flops,
+                                           'params': params,
+                                           'running_time': running_time}
+                                result_list.append(results)
+
+    pd.DataFrame.from_records(result_list).to_csv('results_runtime.csv')
