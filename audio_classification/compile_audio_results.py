@@ -41,6 +41,7 @@ if __name__ == "__main__":
         'val_accuracy': ['mean', 'std'],
         'test_accuracy': ['mean', 'std']
     }).reset_index()
-    pass
+
+    res_df.to_csv('results_audio_classification.csv')
 
 
