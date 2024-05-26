@@ -138,13 +138,13 @@ def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks
 
     return flops, params, running_time
 
-N_ITERATIONS = 10
+N_ITERATIONS = 5
 if __name__ == '__main__':
     data = fetch_f1_data()
 
     result_list = []
-    for N in range(100, 1001, 25):
-        for E in range(25, 201, 25):
+    for N in range(100, 1001, 50):
+        for E in range(50, 201, 50):
             for num_layers in [1, 2]:
                 for model in ['base', 'base_continual']:
                     flops, params, running_time = evaluate_model(N, E, 16, 1, data, model, num_layers, iterations=N_ITERATIONS)
@@ -158,6 +158,7 @@ if __name__ == '__main__':
                                'flops': flops,
                                'params': params,
                                'running_time': running_time}
+                    print(results)
                     result_list.append(results)
                 for model in ['nystromformer', 'continual_nystrom']:
                     for M in [2**i for i in range(1, math.ceil(math.log2(N)))]:
@@ -178,6 +179,7 @@ if __name__ == '__main__':
                                            'flops': flops,
                                            'params': params,
                                            'running_time': running_time}
+                                print(results)
                                 result_list.append(results)
 
     pd.DataFrame.from_records(result_list).to_csv('results_runtime.csv')
