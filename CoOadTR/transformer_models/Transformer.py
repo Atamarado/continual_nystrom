@@ -87,10 +87,11 @@ def CoNystromTransformerModel(
     depth,
     heads,
     mlp_dim,
+    device,
     dropout_rate=0.1,
     attn_dropout_rate=0.1,
     sequence_len=64,
-    num_landmarks=10
+    num_landmarks=10,
 ):
     assert depth in {1, 2}
 
@@ -103,7 +104,7 @@ def CoNystromTransformerModel(
             query_index=-1,
             dim_feedforward=mlp_dim,
             activation=nn.GELU(),
-            device=None,
+            device=device,
             dtype=None,
             single_output_forward=True,
             num_landmarks=num_landmarks
@@ -117,7 +118,7 @@ def CoNystromTransformerModel(
         dropout=dropout_rate,
         dim_feedforward=mlp_dim,
         activation=nn.GELU(),
-        device=None,
+        device=device,
         dtype=None,
         num_landmarks=num_landmarks
     )
@@ -128,6 +129,7 @@ def CoTransformerModel(
     depth,
     heads,
     mlp_dim,
+    device,
     dropout_rate=0.1,
     attn_dropout_rate=0.1,
     sequence_len=64,
@@ -143,7 +145,7 @@ def CoTransformerModel(
             query_index=-1,
             dim_feedforward=mlp_dim,
             activation=nn.GELU(),
-            device=None,
+            device=device,
             dtype=None,
             single_output_forward=True
         )
@@ -156,7 +158,7 @@ def CoTransformerModel(
         dropout=dropout_rate,
         dim_feedforward=mlp_dim,
         activation=nn.GELU(),
-        device=None,
+        device=device,
         dtype=None,
     )
     return co.TransformerEncoder(layer_factory, num_layers=depth)

@@ -1,9 +1,5 @@
 import argparse
-import datetime
-import json
-import random
-import time
-import numpy as np
+import ast
 
 
 def str2bool(string):
@@ -67,10 +63,6 @@ def get_args_parser():
         "--classification_pred_loss_coef", default=0.5, type=float
     )  # 0.5
 
-    # encoder
-    parser.add_argument(
-        "--nystrom", default=False, type=bool, help="allows to select either nystromformer or regular transformer"
-    )
     parser.add_argument(
         "--num_landmarks", default=10, type=int, help="number of landmarks to use when using the nystrom method"
     )
@@ -95,12 +87,6 @@ def get_args_parser():
     parser.add_argument(
         "--attn_dropout_rate", default=0.1, type=float, help="attn dropout"
     )
-    parser.add_argument(
-        "--positional_encoding_type",
-        default="recycling_learned",
-        type=str,
-        help="recycling_learned or recycling_fixed",
-    )  # learned  fixed
     parser.add_argument(
         "--num_embeddings",
         default=64,
@@ -145,9 +131,6 @@ def get_args_parser():
         "--device", default="cuda", help="device to use for training / testing"
     )
 
-    parser.add_argument(
-        "--output_dir", default="models", help="path where to save, empty for no saving"
-    )
     parser.add_argument("--seed", default=20, type=int)
     parser.add_argument("--resume", default="", help="resume from checkpoint")
     parser.add_argument(
@@ -166,5 +149,11 @@ def get_args_parser():
         default="tcp://127.0.0.1:12342",
         help="url used to set up distributed training",
     )
+
+    parser.add_argument("--model", default='base', type=str,
+                        help='[base, base_continual, nystromformer, continual_nystrom]')
+    parser.add_argument("--fit_layer_epochs", default=[], type=ast.literal_eval)
+    parser.add_argument("--freeze_weights", default="both", type=str,
+                        help='[both, true, false]')
     # 'env://'
     return parser

@@ -22,6 +22,7 @@ def CoVisionTransformer(
     num_heads,
     num_layers,
     hidden_dim,
+    device,
     dropout_rate=0.0,
     attn_dropout_rate=0.0,
     use_representation=True,
@@ -59,6 +60,7 @@ def CoVisionTransformer(
             num_layers,
             num_heads,
             hidden_dim,
+            device,
             dropout_rate,
             attn_dropout_rate,
             num_landmarks,
@@ -69,6 +71,7 @@ def CoVisionTransformer(
             num_layers,
             num_heads,
             hidden_dim,
+            device,
             dropout_rate,
             attn_dropout_rate,
         )

@@ -20,7 +20,125 @@ from test import test_one_epoch
 import torch.nn as nn
 
 
+def one_epoch_train_loop(model, criterion, data_loader_train, data_loader_val, logger, optimizer, n_parameters,
+                         device, epoch, sampler_train, lr_scheduler, output_dir, model_without_ddp):
+    if args.distributed:
+        sampler_train.set_epoch(epoch)
+
+    train_stats = train_one_epoch(
+        model,
+        criterion,
+        data_loader_train,
+        optimizer,
+        device,
+        epoch,
+        args.clip_max_norm,
+    )
+
+    lr_scheduler.step()
+    if args.output_dir:
+        checkpoint_paths = [output_dir / "checkpoint.pth"]
+        # extra checkpoint before LR drop and every 100 epochs
+        if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
+            checkpoint_paths.append(output_dir / f"checkpoint{epoch:04}.pth")
+        for checkpoint_path in checkpoint_paths:
+            utils.save_on_master(
+                {
+                    "model": model_without_ddp.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "lr_scheduler": lr_scheduler.state_dict(),
+                    "epoch": epoch,
+                    "args": args,
+                },
+                checkpoint_path,
+            )
+
+    test_stats = evaluate(
+        model,
+        criterion,
+        data_loader_val,
+        device,
+        logger,
+        args,
+        epoch,
+        nprocs=utils.get_world_size(),
+    )
+
+    log_stats = {
+        **{f"train_{k}": v for k, v in train_stats.items()},
+        **{f"test_{k}": v for k, v in test_stats.items()},
+        "epoch": epoch,
+        "n_parameters": n_parameters,
+    }
+
+    if args.output_dir and utils.is_main_process():
+        with (output_dir / "log_tran&test.txt").open("a") as f:
+            f.write(json.dumps(log_stats) + "\n")
+
+
+def fix_landmarks(model, data_loader, config, device, freeze_weights=True, layer_number=0, kmeans_attempts=10):
+    print("Computing and fixing landmarks for encoder layer number "+str(layer_number)+"...")
+
+    seed = config.seed
+    total_layers = config.num_layers
+
+    assert layer_number < total_layers
+
+    # TODO: Not very good code
+    if config.num_layers == 1:
+        nystrom_module = model[3][0][1]
+    elif layer_number == 0:
+        nystrom_module = model[3][0][0][0][1]
+    else:
+        nystrom_module = list(model[3][0][layer_number].children())[0][0][1]
+
+    if freeze_weights:
+        for param in model[:3].parameters():
+            param.requires_grad = False
+        if layer_number > 0 and total_layers > 1:
+            for param in model[3][0][:layer_number].parameters():
+                param.requires_grad = False
+
+        linear_q = nystrom_module.W_q
+        linear_k = nystrom_module.W_k
+        for linear_q_elem in linear_q:
+            for param in linear_q_elem.parameters():
+                param.requires_grad = False
+        for linear_k_elem in linear_k:
+            for param in linear_k_elem.parameters():
+                param.requires_grad = False
+
+    # Feature data extraction
+    all_features = []
+    for camera_inputs, motion_inputs, _, _, _, _ in data_loader:
+        features = torch.cat((camera_inputs.to(device), motion_inputs.to(device)), 2).transpose(1, 2)
+
+        with torch.no_grad():
+            features = model[:3](features)
+            if layer_number > 0 and total_layers > 1:
+                features = model[3][0][:layer_number](features)
+            all_features.append(features.detach().to("cpu"))
+    all_features = torch.cat(all_features, dim=0)
+
+    # Add the new landmarks
+    nystrom_module.fix_landmarks(all_features, kmeans_attempts=kmeans_attempts, seed=seed)
+    print("Finished fixing landmarks for encoder layer " + str(layer_number))
+
+
+def train_fixed_landmarks(model, criterion, data_loader_train, data_loader_val, logger, optimizer, n_parameters,
+                             device, config, sampler_train, lr_scheduler, output_dir, model_without_ddp, freeze_weights=True):
+    cum_epoch = config.epochs
+    for num_layer, num_epochs_fit in enumerate(config.fit_layer_epochs):
+        fix_landmarks(model, data_loader_train, config, device, freeze_weights=freeze_weights, layer_number=num_layer)
+        for _ in range(num_epochs_fit):
+            one_epoch_train_loop(model, criterion, data_loader_train, data_loader_val, logger, optimizer, n_parameters,
+                         device, cum_epoch, sampler_train, lr_scheduler, output_dir, model_without_ddp)
+            cum_epoch += 1
+
 def main(args):
+    args.output_dir = get_model_folder(args, fixed_landmarks=False, freeze_weights=False)
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
     utils.init_distributed_mode(args)
     command = "python " + " ".join(sys.argv)
     this_dir = args.output_dir
@@ -72,9 +190,10 @@ def main(args):
         dropout_rate=args.dropout_rate,
         attn_dropout_rate=args.attn_dropout_rate,
         num_channels=args.dim_feature,
-        positional_encoding_type=args.positional_encoding_type,
-        nystrom=args.nystrom,
-        num_landmarks=args.num_landmarks
+        positional_encoding_type="recycling_learned" if args.model in ["base_continual", "nystromformer"] else "recycling_fixed",
+        nystrom=args.model in ["nystromformer", "continual_nystrom"],
+        num_landmarks=args.num_landmarks,
+        device=device,
     )
 
     # Compute FLOPs
@@ -94,7 +213,7 @@ def main(args):
         # Check max mem
         with torch.no_grad():
             model.clean_state()
-            model.to(device)
+            model = model.to(device)
             t = torch.randn(1, args.dim_feature, device=device)
             for _ in range(args.enc_layers):
                 model.forward_step(t)
@@ -116,7 +235,7 @@ def main(args):
         ...
 
     model.call_mode = "forward"
-    model.to(device)
+    model = model.to(device)
 
     loss_need = [
         "labels_encoder",
@@ -219,63 +338,56 @@ def main(args):
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            sampler_train.set_epoch(epoch)
+        one_epoch_train_loop(model, criterion, data_loader_train, data_loader_val, logger, optimizer, n_parameters,
+                             device, epoch, sampler_train, lr_scheduler, output_dir, model_without_ddp)
 
-        train_stats = train_one_epoch(
-            model,
-            criterion,
-            data_loader_train,
-            optimizer,
-            device,
-            epoch,
-            args.clip_max_norm,
-        )
+    if args.model in ["nystromformer", "continual_nystrom"] and len(args.fit_layer_epochs) > 0:
+        if args.freeze_weights == "both":
+            after_normal_checkpoint = output_dir / f"checkpoint{args.epochs:04}.pth"
+            utils.save_on_master(
+                {
+                    "model": model_without_ddp.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "lr_scheduler": lr_scheduler.state_dict(),
+                    "epoch": args.epochs,
+                    "args": args,
+                },
+                after_normal_checkpoint,
+            )
 
-        lr_scheduler.step()
-        if args.output_dir:
-            checkpoint_paths = [output_dir / "checkpoint.pth"]
-            # extra checkpoint before LR drop and every 100 epochs
-            if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
-                checkpoint_paths.append(output_dir / f"checkpoint{epoch:04}.pth")
-            for checkpoint_path in checkpoint_paths:
-                utils.save_on_master(
-                    {
-                        "model": model_without_ddp.state_dict(),
-                        "optimizer": optimizer.state_dict(),
-                        "lr_scheduler": lr_scheduler.state_dict(),
-                        "epoch": epoch,
-                        "args": args,
-                    },
-                    checkpoint_path,
-                )
+        if args.freeze_weights in ["true", "both"]:
+            train_fixed_landmarks(model, criterion, data_loader_train, data_loader_val, logger, optimizer, n_parameters,
+                             device, args, sampler_train, lr_scheduler, output_dir, model_without_ddp,
+                                  freeze_weights=True)
 
-        test_stats = evaluate(
-            model,
-            criterion,
-            data_loader_val,
-            device,
-            logger,
-            args,
-            epoch,
-            nprocs=utils.get_world_size(),
-        )
+        if args.freeze_weights == "both":
+            model.load_state_dict(torch.load(after_normal_checkpoint))
 
-        log_stats = {
-            **{f"train_{k}": v for k, v in train_stats.items()},
-            **{f"test_{k}": v for k, v in test_stats.items()},
-            "epoch": epoch,
-            "n_parameters": n_parameters,
-        }
-
-        if args.output_dir and utils.is_main_process():
-            with (output_dir / "log_tran&test.txt").open("a") as f:
-                f.write(json.dumps(log_stats) + "\n")
-
+        if args.freeze_weights in ["false", "both"]:
+            train_fixed_landmarks(model, criterion, data_loader_train, data_loader_val, logger, optimizer, n_parameters,
+                                  device, args, sampler_train, lr_scheduler, output_dir, model_without_ddp,
+                                  freeze_weights=False)
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print("Training time {}".format(total_time_str))
 
+def get_model_folder(config, fixed_landmarks=True, freeze_weights=True):
+    if config.model in ['base', 'base_continual'] or not fixed_landmarks:
+        return '%s_%d_layers_seeds_%d' % (
+            config.model,
+            config.num_layers,
+            config.seed,
+        )
+    else:
+        fit_layer_epochs = str(config.fit_layer_epochs).replace('[', '-').replace(']', '-')
+        return '%s_%d_layers_%d_landmarks_%s_%d_seeds_%d' % (
+            config.model,
+            config.num_layers,
+            config.num_landmarks,
+            fit_layer_epochs,
+            freeze_weights,
+            config.seed,
+        )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -289,6 +401,26 @@ if __name__ == "__main__":
     args.test_session_set = data_info["test_session_set"]
     args.class_index = data_info["class_index"]
     args.numclass = len(args.class_index)
-    if args.output_dir:
-        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    main(args)
+
+    for seed in range(5):
+        args.seed = seed
+        if seed != 0:
+            for model in ["base", "base_continual"]:
+                args.model = model
+                for num_layers in [1, 2]:
+                    args.num_layers = num_layers
+                    main(args)
+        for model in ["nystromformer", "continual_nystrom"]:
+            args.model = model
+            for num_landmarks in [2, 4, 8, 16, 32]:
+                args.num_landmarks = num_landmarks
+
+                args.num_layers = 1
+                args.fit_layer_epochs = [5]
+                main(args)
+
+                args.num_layers = 2
+                args.fit_layer_epochs = [5, 5]
+                main(args)
+
+            args.fit_layer_epochs = []
