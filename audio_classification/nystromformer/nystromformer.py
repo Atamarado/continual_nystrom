@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+import gc
 
 from torch.nn.modules.activation import MultiheadAttention
 from sklearn.cluster import KMeans
@@ -40,6 +41,7 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
     ):
         super().__init__(embed_dim, num_heads)
 
+        self.device = device
         self.sequence_len = sequence_len
         self.num_head = num_heads
         self.head_dim = embed_dim // num_heads
@@ -58,29 +60,27 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
         self.fixed_landmarks = fixed_landmarks
         self.compute_inverse = compute_inverse
 
-    def fix_landmarks(self, q_data, k_data=None, alg="base", kmeans_attempts=10, seed=0):
-        device = q_data.device
+    def fix_landmarks(self, q_data, k_data=None, alg="base", kmeans_attempts=3, seed=0):
         self.fixed_landmarks = True
         if k_data is None:
             k_data = q_data
 
-        # (bs, num_head, n, head_dim)
-        q_data = self.prepare_input(q_data, self.W_q, join_nhead=False)
-        k_data = self.prepare_input(k_data, self.W_k, join_nhead=False)
-
-        q_data = torch.permute(q_data, (1, 0, 2, 3))
-        k_data = torch.permute(k_data, (1, 0, 2, 3))
-
         q_tilde = []
         k_tilde = []
         if alg == "kmeans":
-            for q_head_data, k_head_data in zip(q_data, k_data):
-                # Reshape data to adapt it to the method
-                q_head_data = torch.flatten(q_head_data, 0, 1)
-                k_head_data = torch.flatten(k_head_data, 0, 1)
+            for i in range(self.num_head):
+                # Clear caches, as this operation may require the storage of big amounts of data
+                torch.cuda.empty_cache()
+                gc.collect()
 
-                q_head_data = q_head_data.detach().cpu()
-                k_head_data = k_head_data.detach().cpu()
+                q_head_data = []
+                k_head_data = []
+                for j in range(0, q_data.size()[0], self.batch_size):
+                    q_head_data.append(self.prepare_input(q_data[j:min(j+self.batch_size, q_data.size()[0])], self.W_q, index=i).flatten(0, 1).detach().cpu())
+                    k_head_data.append(self.prepare_input(k_data[j:min(j+self.batch_size, q_data.size()[0])], self.W_q, index=i).flatten(0, 1).detach().cpu())
+
+                q_head_data = torch.cat(q_head_data, dim=0)
+                k_head_data = torch.cat(k_head_data, dim=0)
 
                 q_clusters = KMeans(n_clusters=self.num_landmarks,
                                     n_init=kmeans_attempts,
@@ -94,8 +94,8 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
         else:
             raise NotImplementedError("Only kmeans is implemented")
 
-        q_tilde = torch.stack(q_tilde, dim=0).type(torch.float32).to(device)
-        k_tilde = torch.stack(k_tilde, dim=0).type(torch.float32).to(device)
+        q_tilde = torch.stack(q_tilde, dim=0).type(torch.float32).to(self.device)
+        k_tilde = torch.stack(k_tilde, dim=0).type(torch.float32).to(self.device)
 
         # Repeat for all samples in the batch size
         q_tilde = q_tilde.repeat(self.batch_size, 1, 1)
@@ -110,21 +110,24 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
 
         return q_tilde, k_tilde, Gamma_D, Gamma_D_inv
 
-    def prepare_input(self, query, linear, join_nhead=True):
+    def prepare_input(self, query, linear, index=None, join_nhead=True):
+        query = query.to(self.device)
         # (bs, d, n) -> (bs, n, d)
         query = query.permute(0, 2, 1)
+        if index is None:
+            lin_queries = []
+            for w_q in linear:
+                lin_queries.append(w_q(query))
+            # (bs, num_head, n, head_dim)
+            lin_queries = torch.stack(lin_queries, dim=1).to(query.device)
 
-        lin_queries = []
-        for w_q in linear:
-            lin_queries.append(w_q(query))
-        # (bs, num_head, n, head_dim)
-        lin_queries = torch.stack(lin_queries, dim=1).to(query.device)
+            # (bs, num_head, n, head_dim) -> (bs*num_head, n, head_dim)
+            if join_nhead:
+                lin_queries = lin_queries.flatten(0, 1)
 
-        # (bs, num_head, n, head_dim) -> (bs*num_head, n, head_dim)
-        if join_nhead:
-            lin_queries = lin_queries.flatten(0, 1)
-
-        return lin_queries
+            return lin_queries
+        else:
+            return linear[index](query)
 
     def forward(self, query, key=None, value=None, single_output_forward=False):
         bs, d, n = query.shape
