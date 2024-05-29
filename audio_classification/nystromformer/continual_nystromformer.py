@@ -519,7 +519,8 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         single_output_forward=False,
         query_index=None,
         fixed_landmarks=False,
-        compute_inverse=True
+        compute_inverse=True,
+        forward_mode="forward",
     ) -> None:
         assert single_output_mode >= single_output_forward # single_output_forward can only be True when single_output_mode is
 
@@ -546,6 +547,7 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         self.single_output_forward = single_output_forward
         self.query_index = query_index
         self.compute_inverse = compute_inverse
+        self.forward_mode = forward_mode
 
         if init_mem:
             torch.set_default_device(device=device)
@@ -564,6 +566,12 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         self.state = tuple(state)
 
     def forward(self, query, key=None, value=None):
+        match self.forward_mode:
+            case "forward_steps":
+                return self.forward_steps(query, key, value)
+            case "forward_step":
+                return self.forward_step(query, key, value)
+
         if not self.single_output_forward or not self.single_output_mode:
             return NystromMultiheadAttention.forward(
                 self, query, key, value
@@ -609,6 +617,10 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         if value is None:
             value = query
 
+        query = torch.squeeze(self.prepare_input(query.unsqueeze(-1), self.W_q))
+        key = torch.squeeze(self.prepare_input(key.unsqueeze(-1), self.W_k))
+        value = torch.squeeze(self.prepare_input(value.unsqueeze(-1), self.W_v))
+
         o, new_state = _scaled_dot_product_attention_step(
             self.state, query, key, value,
             single_output=self.single_output_mode,
@@ -633,7 +645,13 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         *args,
         **kwargs,
     ) -> Optional[Tensor]:
-        outs = []
+        bs, d, n = query.shape
+
+        if bs != self.batch_size:
+            torch.set_default_device(device=self.device)
+            self.state = _scaled_dot_product_attention_default_state(bs, self.sequence_len, self.embed_dim, self.num_heads, self.num_landmarks)
+            torch.set_default_device("cpu")
+            self.batch_size = bs
 
         for i in range(query.size()[2]):
             query_step = query[:, :, i]
@@ -648,14 +666,13 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
 
             o = self.forward_step(query_step, key_step, value_step, update_state, *args, **kwargs)
 
-            if isinstance(o, Tensor):
-                outs.append(o)
+            # if isinstance(o, Tensor):
+            #     outs.append(o)
 
-        if outs:
-            o = torch.stack(outs, dim=2)
-
-        # if isinstance(o, Tensor) and self.embed_dim_second:
-        #     o = o.permute(0, 3, 1, 2)  # N T T' E -> N E T T'
+        if self.single_output_forward:
+            n = 1
+        o = o.reshape((bs, n, d))
+        o = self.ff(o).permute(0, 2, 1)
 
         return o
 

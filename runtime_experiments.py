@@ -87,7 +87,7 @@ def compute_flops_and_params(model, model_type, batch_size, input_dim, seq_len):
 
     return flops, params
 
-def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks=False, iterations=10, compute_inverse=True):
+def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks=False, iterations=10):
     # Model assertions
     assert M is None or M < N
     assert model_type in ['base', 'base_continual', 'nystromformer', 'continual_nystrom']
@@ -111,9 +111,6 @@ def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks
 
     # Refresh model
     model = init_model(model_type, layers, B, N, H, E, M, fixed_landmarks, data)
-
-    if not compute_inverse and model_type in ['nystromformer', 'continual_nystrom']:
-        model[0][1].compute_inverse = False
 
     if model_type in ['base_continual', 'continual_nystrom']:
         model.call_mode = "forward_steps"
@@ -154,7 +151,6 @@ if __name__ == '__main__':
                                'model': model,
                                'M': 0,
                                'fixed_landmarks': False,
-                               'compute_inverse': False,
                                'flops': flops,
                                'params': params,
                                'running_time': running_time}
@@ -163,19 +159,16 @@ if __name__ == '__main__':
                 for model in ['nystromformer', 'continual_nystrom']:
                     for M in [2**i for i in range(1, math.ceil(math.log2(N)))]:
                         for fixed_landmarks in [True, False]:
-                            for compute_inverse in [True, False]:
                                 flops, params, running_time = evaluate_model(N, E, 16, 1, data, model, 1,
                                                                              M=M,
                                                                              fixed_landmarks=fixed_landmarks,
-                                                                             iterations=N_ITERATIONS,
-                                                                             compute_inverse=compute_inverse)
+                                                                             iterations=N_ITERATIONS)
                                 results = {'N': N,
                                            'E': E,
                                            'num_layers': num_layers,
                                            'model': model,
                                            'M': M,
                                            'fixed_landmarks': fixed_landmarks,
-                                           'compute_inverse': compute_inverse,
                                            'flops': flops,
                                            'params': params,
                                            'running_time': running_time}

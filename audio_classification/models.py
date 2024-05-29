@@ -3,10 +3,10 @@ import torch
 import torch.nn as nn
 
 from continual import RecyclingPositionalEncoding
-from nystromformer.transformer import (SingleOutputNystromTransformerEncoderLayer,
+from .nystromformer.transformer import (SingleOutputNystromTransformerEncoderLayer,
                                        NystromTransformerEncoderLayerFactory,
                                        NystromTransformerEncoder)
-from nystromformer.nystromformer import LearnedPositionalEncoding
+from .nystromformer.nystromformer import LearnedPositionalEncoding
 
 def CoNystromTransformerModel(
     embed_dim,

@@ -31,7 +31,7 @@ from models import NonCoVisionTransformer, CoVisionTransformer, CoNystromVisionT
 # os.chdir(ROOT_DIR)
 
 # Select a single GPU to perform the training
-SELECTED_GPUS = ["3"]
+SELECTED_GPUS = ["0"]
 os.environ['CUDA_VISIBLE_DEVICES'] = SELECTED_GPUS[0]
 
 # Configure  GPUS
@@ -422,7 +422,7 @@ def calculate_accuracy(model, data_loader):
     return accuracy
 
 MODEL_FOLDER = "saved_models"
-def get_model_path(config, folder=MODEL_FOLDER, fixed_landmarks=True, freeze_weights=True, extension="pth"):
+def get_model_path(config, folder=MODEL_FOLDER, fixed_landmarks=False, freeze_weights=False, extension="pth"):
     if config.model in ['base', 'base_continual'] or not fixed_landmarks:
         return '%s/%s_%d_layers_seeds_%d_%d.%s' % (
             folder,
@@ -450,6 +450,21 @@ def seed_worker(_):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+def compute_test_accuracy(model, test_loader):
+    if config.model == "continual_nystrom":
+        if config.num_layers == 1:
+            model[3][0].self_attn.forward_mode = "forward_steps"
+        else:
+            model[3][0][0][0].self_attn.forward_mode = "forward_steps"
+    test_accuracy = calculate_accuracy(model, test_loader)
+    if config.model == "continual_nystrom":
+        if config.num_layers == 1:
+            model[3][0].self_attn.forward_mode = "forward"
+        else:
+            model[3][0][0][0].self_attn.forward_mode = "forward"
+    return test_accuracy
+
 
 DATASET_FOLDER = "gtzan_datasets"
 try:
@@ -531,9 +546,7 @@ def train_fixed_landmarks(model, config, out_file, train_dataset, optimizer, cri
         best_path = get_model_path(config, fixed_landmarks=False)
     model.load_state_dict(torch.load(best_path, map_location="cuda")) # .to("cuda:"+str(SELECTED_GPUS[0])))
 
-    if config.model == "continual_nystrom":
-        model[3].call_mode = "forward_steps"
-    test_accuracy = calculate_accuracy(model, test_loader)
+    test_accuracy = compute_test_accuracy(model, test_loader)
 
     output_content = {
         "config": config,
@@ -593,7 +606,7 @@ def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criter
 
     return train_accuracy, best_val_accuracy
 
-def torch_train(config):
+def torch_train(config, folder="raw_results_2"):
     print("\n\n\n" + str(config))
 
     assert config.model in ["base", "base_continual", "nystromformer", "continual_nystrom"]
@@ -709,34 +722,13 @@ def torch_train(config):
                                             writer, best_val_accuracy, fixed_landmarks=False)
 
     if config.model not in ['base', 'base_continual']:
-        if config.freeze_weights == "both":
-            # Copy current state of the model
-            torch.save(model.state_dict(), get_model_path(config, fixed_landmarks=False, extension="ptht"))
-
-        if config.freeze_weights in ["true", "both"]:
-            train_fixed_landmarks(model, config,
-                                  get_model_path(config, "raw_results", True, True, "pkl"),
-                                  train_dataset, optimizer, criterion, train_loader, val_loader,
-                                  test_loader, writer, best_val_accuracy, freeze_weights=True)
-
-        if config.freeze_weights == "both":
-            model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False, extension="ptht"), map_location="cuda")) # .to("cuda:"+str(SELECTED_GPUS[0])))
-
-        if config.freeze_weights in ["false", "both"]:
-            train_fixed_landmarks(model, config,
-                                  get_model_path(config, "raw_results", True, False, "pkl"),
-                                  train_dataset, optimizer, criterion, train_loader, val_loader,
-                                  test_loader, writer, best_val_accuracy, freeze_weights=False)
-
-    writer.flush()
-    writer.close()
+        # Copy current state of the model
+        torch.save(model.state_dict(), get_model_path(config, fixed_landmarks=False, extension="ptht"))
 
     # Reload best model for test
-    model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False), map_location="cuda")) # .to("cuda:"+str(SELECTED_GPUS[0])))
+    model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False), map_location="cuda"))
 
-    if config.model == "continual_nystrom":
-        model[3].call_mode = "forward_steps"
-    test_accuracy = calculate_accuracy(model, test_loader)
+    test_accuracy = compute_test_accuracy(model, test_loader)
 
     output_content = {
         "config": config,
@@ -745,10 +737,31 @@ def torch_train(config):
         "val_accuracy": best_val_accuracy,
         "test_accuracy": test_accuracy,
     }
-    dump_file_path = get_model_path(config, "raw_results", False, extension="pkl")
+    dump_file_path = get_model_path(config, folder, False, False, extension="pkl")
     with open(dump_file_path, 'wb') as f:
         pickle.dump(output_content, f)
 
+    if config.model not in ['base', 'base_continual']:
+        model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False, freeze_weights=False, extension="ptht"), map_location="cuda"))
+
+
+        if config.freeze_weights in ["true", "both"] and config.fit_layer_epochs != []:
+            train_fixed_landmarks(model, config,
+                                  get_model_path(config, "raw_results", True, True, "pkl"),
+                                  train_dataset, optimizer, criterion, train_loader, val_loader,
+                                  test_loader, writer, best_val_accuracy, freeze_weights=True)
+
+        if config.freeze_weights == "both":
+            model.load_state_dict(torch.load(get_model_path(config, fixed_landmarks=False, freeze_weights=False, extension="ptht"), map_location="cuda"))
+
+        if config.freeze_weights in ["false", "both"] and config.fit_layer_epochs != []:
+            train_fixed_landmarks(model, config,
+                                  get_model_path(config, "raw_results", True, False, "pkl"),
+                                  train_dataset, optimizer, criterion, train_loader, val_loader,
+                                  test_loader, writer, best_val_accuracy, freeze_weights=False)
+
+    writer.flush()
+    writer.close()
     return model, train_accuracy, best_val_accuracy, test_accuracy
 
 def std(lst):
@@ -857,15 +870,7 @@ if __name__ == "__main__":
     )
     config = parser.parse_args()
 
-    # config.num_layers = 1
-    # config.model = "nystromformer"
-    # config.num_landmarks = 2
-    # config.fit_layer_epochs = [25]
-    # config.data_seed = 0
-    # config.model_seed = 0
-    # torch_train(config)
-
-    for data_seed in [4]:
+    for data_seed in range(5):
         config.data_seed = data_seed
         for model_seed in range(5):
             config.model_seed = model_seed
@@ -889,67 +894,3 @@ if __name__ == "__main__":
 
             config.fit_layer_epochs = []
 
-
-    # model, train_accuracy, val_accuracy, test_accuracy = torch_train(config)
-    # pass
-
-    # tf_config = {
-    #     'batch_size': 64,
-    #     'epochs': 100,
-    #     'lr': 1e-4,
-    #     'retrain': False,
-    # }
-    # tf_train(tf_config)
-    #
-    # head_model = tf.keras.models.load_model(FINE_TUNED_VGGISH_PATH)
-    # head_params = get_tf_params(head_model)
-    # head_flops = get_tf_flops(head_model)
-    # print('Head: params %.2fM; FLOPS %.2fM' % (head_params / 10 ** 6, head_flops / 10 ** 6))
-    #
-    # FILENAME = 'results_dummy.txt'
-
-    # torch_config = {
-    #     'batch_size': 32,
-    #     'lr': 1e-5,
-    #     'weight_decay': 1e-4,
-    #     'epochs': 50,
-    #     'version': 'v5',
-    #     'num_layers': 1,
-    #     'model': 'nystromformer',
-    #     'num_landmarks': 10,
-    #     'fit_layer_epochs': [5],
-    #     'freeze_weights': True,
-    # }
-    # evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
-    #
-    # torch_config["num_layers"] = 2
-    # torch_config['fit_layer_epochs'] = [5, 5]
-    # evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
-    #
-    # torch_config["num_layers"] = 1
-    # torch_config['fit_layer_epochs'] = [5]
-    # torch_config["model"] = "continual_nystrom"
-    # evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
-    #
-    # torch_config["num_layers"] = 2
-    # torch_config['fit_layer_epochs'] = [5, 5]
-    # evaluate_config(torch_config, filename=FILENAME, num_seeds=1)
-
-        # torch_config = {
-        #     'batch_size': 32,
-        #     'lr': 1e-5,
-        #     'weight_decay': 1e-4,
-        #     'epochs': 50,
-        #     'version': 'v5',
-        #     'num_layers': 1,
-        #     'model': 'continual',
-        #     'seed': seed
-        # }
-        # continual_model, test_accuracy = torch_train(torch_config)
-        # flops, params = get_flops_and_params(continual_model, torch_config)
-        # print(test_accuracy, flops, params)
-
-        # torch_config["model"] = "continual_nystrom"
-        # continual_model, test_accuracy = torch_train(torch_config)
-        # flops, params = get_flops_and_params(continual_model, torch_config)
-        # print(test_accuracy, flops, params)
