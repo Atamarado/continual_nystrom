@@ -120,20 +120,21 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
         query = query.to(self.device)
         # (bs, d, n) -> (bs, n, d)
         query = query.permute(0, 2, 1)
-        if index is None:
-            lin_queries = []
-            for w_q in linear:
-                lin_queries.append(w_q(query))
-            # (bs, num_head, n, head_dim)
-            lin_queries = torch.stack(lin_queries, dim=1).to(query.device)
-
-            # (bs, num_head, n, head_dim) -> (bs*num_head, n, head_dim)
-            if join_nhead:
-                lin_queries = lin_queries.flatten(0, 1)
-
-            return lin_queries
-        else:
-            return linear[index](query)
+        return query
+        # if index is None:
+        #     lin_queries = []
+        #     for w_q in linear:
+        #         lin_queries.append(w_q(query))
+        #     # (bs, num_head, n, head_dim)
+        #     lin_queries = torch.stack(lin_queries, dim=1).to(query.device)
+        #
+        #     # (bs, num_head, n, head_dim) -> (bs*num_head, n, head_dim)
+        #     if join_nhead:
+        #         lin_queries = lin_queries.flatten(0, 1)
+        #
+        #     return lin_queries
+        # else:
+        #     return linear[index](query)
 
     def forward(self, query, key=None, value=None, single_output_forward=False):
         bs, d, n = query.shape
@@ -177,9 +178,7 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
 
         if single_output_forward:
             n = 1
-        output = attn_out.reshape((bs, n, d))
-        output = self.ff(output).permute(0, 2, 1)
-
+        output = attn_out.reshape((bs, n, d)).permute(0, 2, 1)
         return output
 
     def split_heads(self, X):

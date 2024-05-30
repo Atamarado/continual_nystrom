@@ -671,8 +671,7 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
 
         if self.single_output_forward:
             n = 1
-        o = o.reshape((bs, n, d))
-        o = self.ff(o).permute(0, 2, 1)
+        o = o.reshape((bs, n, d)).permute(0, 2, 1)
 
         return o
 
