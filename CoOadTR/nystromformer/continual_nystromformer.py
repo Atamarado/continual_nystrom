@@ -554,9 +554,9 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             self.state = _scaled_dot_product_attention_default_state(batch_size, sequence_len, embed_dim, num_heads, num_landmarks)
             torch.set_default_device(device="cpu")
 
-    def fix_landmarks(self, q_data, k_data=None, alg="kmeans", kmeans_attempts=10, seed=0):
+    def fix_landmarks(self, q_data, k_data=None, alg="kmeans", kmeans_attempts=10, seed=0, num_points=0):
         q_tilde, k_tilde, Gamma_D, Gamma_D_inv = (
-            NystromMultiheadAttention.fix_landmarks(self, q_data, k_data, alg=alg, kmeans_attempts=kmeans_attempts, seed=seed))
+            NystromMultiheadAttention.fix_landmarks(self, q_data, k_data, alg=alg, kmeans_attempts=kmeans_attempts, seed=seed, num_points=num_points))
 
         state = list(self.state)
         state[0] = q_tilde

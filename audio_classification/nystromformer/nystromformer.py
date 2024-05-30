@@ -60,7 +60,7 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
         self.fixed_landmarks = fixed_landmarks
         self.compute_inverse = compute_inverse
 
-    def fix_landmarks(self, q_data, k_data=None, alg="base", kmeans_attempts=3, seed=0):
+    def fix_landmarks(self, q_data, k_data=None, alg="base", kmeans_attempts=3, seed=0, num_points=0):
         self.fixed_landmarks = True
         if k_data is None:
             k_data = q_data
@@ -81,6 +81,12 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
 
                 q_head_data = torch.cat(q_head_data, dim=0)
                 k_head_data = torch.cat(k_head_data, dim=0)
+
+                if num_points > 0:
+                    index = torch.randperm(q_head_data.size()[0], generator=torch.Generator().manual_seed(seed))[:num_points]
+                    q_head_data = q_head_data[index]
+                    index = torch.randperm(q_head_data.size()[0], generator=torch.Generator().manual_seed(seed+1))[:num_points]
+                    k_head_data = k_head_data[index]
 
                 q_clusters = KMeans(n_clusters=self.num_landmarks,
                                     n_init=kmeans_attempts,

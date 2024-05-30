@@ -13,6 +13,8 @@ import util as utl
 import os
 import utils
 
+import time
+
 import transformer_models
 from dataset import TRNTHUMOSDataLayer, TRNTVSeriesDataLayer
 from train import train_one_epoch, evaluate
@@ -121,7 +123,11 @@ def fix_landmarks(model, data_loader, config, device, freeze_weights=True, layer
     all_features = torch.cat(all_features, dim=0)
 
     # Add the new landmarks
-    nystrom_module.fix_landmarks(all_features, kmeans_attempts=kmeans_attempts, seed=seed)
+    start_time = time.time()
+    nystrom_module.fix_landmarks(all_features, kmeans_attempts=kmeans_attempts, seed=seed, num_points=50000)
+    end_time = time.time()
+
+    print("Landmark fixing took "+str((end_time-start_time)/60)+" minutes")
     print("Finished fixing landmarks for encoder layer " + str(layer_number))
 
 
@@ -361,7 +367,7 @@ def main(args):
                                   freeze_weights=True)
 
         if args.freeze_weights == "both":
-            model.load_state_dict(torch.load(after_normal_checkpoint))
+            model.load_state_dict(torch.load(after_normal_checkpoint)["model"])
 
         if args.freeze_weights in ["false", "both"]:
             train_fixed_landmarks(model, criterion, data_loader_train, data_loader_val, logger, optimizer, n_parameters,
@@ -404,12 +410,11 @@ if __name__ == "__main__":
 
     for seed in range(5):
         args.seed = seed
-        if seed != 0:
-            for model in ["base", "base_continual"]:
-                args.model = model
-                for num_layers in [1, 2]:
-                    args.num_layers = num_layers
-                    main(args)
+        for model in ["base", "base_continual"]:
+            args.model = model
+            for num_layers in [1, 2]:
+                args.num_layers = num_layers
+                main(args)
         for model in ["nystromformer", "continual_nystrom"]:
             args.model = model
             for num_landmarks in [2, 4, 8, 16, 32]:
@@ -423,4 +428,4 @@ if __name__ == "__main__":
                 args.fit_layer_epochs = [5, 5]
                 main(args)
 
-            args.fit_layer_epochs = []
+        args.fit_layer_epochs = []
