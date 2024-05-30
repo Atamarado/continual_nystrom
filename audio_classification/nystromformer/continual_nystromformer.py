@@ -617,9 +617,9 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
         if value is None:
             value = query
 
-        query = torch.squeeze(self.prepare_input(query.unsqueeze(-1), self.W_q))
-        key = torch.squeeze(self.prepare_input(key.unsqueeze(-1), self.W_k))
-        value = torch.squeeze(self.prepare_input(value.unsqueeze(-1), self.W_v))
+        query = torch.squeeze(self.prepare_input(query.unsqueeze(-1), self.W_q), dim=1)
+        key = torch.squeeze(self.prepare_input(key.unsqueeze(-1), self.W_k), dim=1)
+        value = torch.squeeze(self.prepare_input(value.unsqueeze(-1), self.W_v), dim=1)
 
         o, new_state = _scaled_dot_product_attention_step(
             self.state, query, key, value,
