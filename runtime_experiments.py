@@ -203,7 +203,7 @@ if __name__ == '__main__':
                            'model': model,
                            'M': 0,
                            'fixed_landmarks': False,
-                           'flops': flops,
+                           'running_time': running_time,
                            }
                 print(results)
                 sys.stdout.flush()
@@ -221,7 +221,7 @@ if __name__ == '__main__':
                                    'model': model,
                                    'M': M,
                                    'fixed_landmarks': fixed_landmarks,
-                                   'flops': flops,
+                                   'running_time': running_time,
                                    }
                         print(results)
                         sys.stdout.flush()

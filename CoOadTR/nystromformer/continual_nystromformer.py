@@ -653,7 +653,7 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             torch.set_default_device("cpu")
             self.batch_size = bs
 
-        for i in range(query.size(1)):
+        for i in range(query.size(2)):
             query_step = query[:, :, i]
             if key is None:
                 key_step = query_step
