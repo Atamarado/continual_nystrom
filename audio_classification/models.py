@@ -57,6 +57,7 @@ def CoTransformerModel(
     mlp_dim,
     dropout_rate=0.1,
     sequence_len=64,
+    device=None,
 ):
     if depth == 1:
         transformer_encoder = co.SingleOutputTransformerEncoderLayer(
@@ -66,7 +67,8 @@ def CoTransformerModel(
             dropout=dropout_rate,
             activation=nn.GELU(),
             sequence_len=sequence_len,
-            single_output_forward=True
+            single_output_forward=True,
+            device=device,
         )
     else:
         encoder_layer = co.TransformerEncoderLayerFactory(
@@ -75,7 +77,9 @@ def CoTransformerModel(
             dim_feedforward=mlp_dim,
             dropout=dropout_rate,
             activation=nn.GELU(),
-            sequence_len=sequence_len)
+            sequence_len=sequence_len,
+            device=device,
+        )
         transformer_encoder = co.TransformerEncoder(encoder_layer, num_layers=depth)
     return transformer_encoder
 
