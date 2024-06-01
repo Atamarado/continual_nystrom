@@ -105,7 +105,7 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
                         if sample_list_k[j] > 0:
                             full_k_head_data = self.prepare_input(k_data[j:min(j + self.batch_size, q_data.size()[0])],
                                                                   self.W_q, index=i).flatten(0, 1).detach().cpu()
-                            perm = torch.randperm(full_q_head_data.size(0))
+                            perm = torch.randperm(full_k_head_data.size(0))
                             idx = perm[:sample_list_k[j]]
                             full_k_head_data = full_k_head_data[idx]
                             k_head_data.append(full_k_head_data)
