@@ -290,22 +290,19 @@ def _scaled_dot_product_attention(
             q_landmarks = get_landmarks(q, m)
         else:
             q_landmarks = q_landmarks[:B]
-            kernel_2 = kernel_2[:B]
         if k_landmarks is None:
             k_landmarks = get_landmarks(k, m)
         else:
             k_landmarks = k_landmarks[:B]
+        if kernel_2 is None:
+            kernel_2 = torch.nn.functional.softmax(torch.bmm(q_landmarks, k_landmarks.transpose(-1, -2)), dim=-1)
+        else:
             kernel_2 = kernel_2[:B]
 
         if single_output_forward:
-            q = q[:, -1].unsqueeze(1)
+            q = q[:, -1:]
 
         kernel_1 = torch.nn.functional.softmax(torch.bmm(q, k_landmarks.transpose(-1, -2)), dim=-1)
-        if kernel_2 is None:
-            if compute_inverse:
-                kernel_2 = torch.nn.functional.softmax(torch.bmm(q_landmarks, k_landmarks.transpose(-1, -2)), dim=-1)
-            else:
-                kernel_2 = 1./iterative_inv(kernel_2)
         kernel_3 = torch.nn.functional.softmax(torch.bmm(q_landmarks, k.transpose(-1, -2)), dim=-1)  # - 1e9 * (1 - mask[:, None, None, :]), dim = -1)
         output = torch.bmm(torch.bmm(kernel_1, kernel_2), torch.bmm(kernel_3, v))
 
