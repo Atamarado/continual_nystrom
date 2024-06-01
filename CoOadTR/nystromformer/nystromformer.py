@@ -111,14 +111,14 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
                             k_head_data.append(full_k_head_data)
                     else:
                         full_q_head_data = self.prepare_input(q_data[j:min(j + self.batch_size, q_data.size()[0])],
-                                                              self.W_q, index=i).flatten(0, 1).detach().cpu()
+                                                              self.W_q, index=i).flatten(0, 1)
                         full_k_head_data = self.prepare_input(k_data[j:min(j + self.batch_size, q_data.size()[0])],
-                                                              self.W_q, index=i).flatten(0, 1).detach().cpu()
+                                                              self.W_q, index=i).flatten(0, 1)
                         q_head_data.append(full_q_head_data)
                         k_head_data.append(full_k_head_data)
 
-                q_head_data = torch.cat(q_head_data, dim=0)
-                k_head_data = torch.cat(k_head_data, dim=0)
+                q_head_data = torch.cat(q_head_data, dim=0).cpu()
+                k_head_data = torch.cat(k_head_data, dim=0).cpu()
 
                 if num_points > 0:
                     index = torch.randperm(q_head_data.size()[0], generator=torch.Generator().manual_seed(seed))[:num_points]

@@ -653,21 +653,18 @@ class ContinualNystromMultiheadAttention(NystromMultiheadAttention):
             torch.set_default_device("cpu")
             self.batch_size = bs
 
-        for i in range(query.size()[2]):
+        for i in range(query.size(1)):
             query_step = query[:, :, i]
-            if key:
+            if key is None:
+                key_step = query_step
+            else:
                 key_step = key[:, :, i]
+            if value is None:
+                value_step = query_step
             else:
-                key_step = query[:, :, i]
-            if value:
                 value_step = value[:, :, i]
-            else:
-                value_step = query[:, :, i]
 
             o = self.forward_step(query_step, key_step, value_step, update_state, *args, **kwargs)
-
-            # if isinstance(o, Tensor):
-            #     outs.append(o)
 
         if self.single_output_forward:
             n = 1

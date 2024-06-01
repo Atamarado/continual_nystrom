@@ -9,11 +9,10 @@ import sys
 import os
 
 from torch.nn.modules.activation import MultiheadAttention
-from continual.transformer import SingleOutputMultiheadAttention
+from continual.transformer import SingleOutputMultiheadAttention, RetroactiveMultiheadAttention
 from audio_classification.nystromformer.nystromformer import NystromMultiheadAttention
 from audio_classification.nystromformer.continual_nystromformer import ContinualNystromMultiheadAttention
 
-from audio_classification.models import CoTransformerModel, CoNystromTransformerModel
 from flops import get_flops_and_params
 
 def min_max_normalize(matrix):
@@ -52,26 +51,30 @@ def fetch_f1_data(batch_size=16):
     f1_data = np.reshape(f1_data, (1, -1, f1_data.shape[-1]))
     return torch.from_numpy(f1_data).to("cuda")
 
-def init_model(model_type, layers, B, N, H, E, M, fixed_landmarks, data=None, device=None):
+def init_model(model_type, B, N, H, E, M, fixed_landmarks, data=None, device=None):
     match model_type:
         case 'base':
             model = MultiheadAttention(E, H, device=device)
-        case 'base_continual':
+        case 'base_continual_single':
             model = SingleOutputMultiheadAttention(E, H, sequence_len=N, device=device)
+        case 'base_continual_retroactive':
+            model = RetroactiveMultiheadAttention(E, H, sequence_len=N, device=device)
         case 'nystromformer':
             model = NystromMultiheadAttention(N, E, H, M, B, device=device, single_output_forward=False)
-        case 'continual_nystrom':
-            model = ContinualNystromMultiheadAttention(E, H, M, sequence_len=N, batch_size=B, device=device)
+        case 'continual_nystrom_single':
+            model = ContinualNystromMultiheadAttention(E, H, M, sequence_len=N, batch_size=B, device=device, single_output_mode=True, single_output_forward=True)
+        case 'continual_nystrom_retroactive':
+            model = ContinualNystromMultiheadAttention(E, H, M, sequence_len=N, batch_size=B, device=device, single_output_mode=False)
 
-    if fixed_landmarks and model_type in ['nystromformer', 'continual_nystrom']:
+    if fixed_landmarks and model_type in ['nystromformer', 'continual_nystrom_single', 'continual_nystrom_retroactive']:
         if data is None:
             raise Exception("We need data to precompute the landmarks")
-        data_split = data[:, :data.size()[1]//N * N]
-        model.fix_landmarks(torch.reshape(data_split, (-1, N, E)), alg="kmeans")
+        data_split = data[:, :, :data.size()[2]//N * N]
+        model.fix_landmarks(torch.reshape(data_split, (-1, E, N)), alg="kmeans")
 
-    if model == 'base_continual':
+    if model_type in ['base_continual_single', 'base_continual_retroactive']:
         model.call_mode = "forward_steps"
-    elif model == 'continual_nystrom':
+    elif model_type in ['continual_nystrom_single', 'continual_nystrom_retroactive']:
         model.forward_mode = "forward_steps"
 
     return model
@@ -82,11 +85,10 @@ def compute_flops_and_params(model, model_type, batch_size, input_dim, seq_len):
     flops, params = get_flops_and_params(model, config, batch_size, input_dim, seq_len)
     return flops, params
 
-def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks=False, iterations=10):
+def evaluate_model(N, E, B, H, data, model_type, M=None, fixed_landmarks=False, iterations=10):
     # Model assertions
     assert M is None or M < N
-    assert model_type in ['base', 'base_continual', 'nystromformer', 'continual_nystrom']
-    assert layers > 0 # TODO: Check what happens when layers > 2
+    assert model_type in ['base', 'base_continual_single', 'base_continual_retroactive', 'nystromformer', 'continual_nystrom_single', 'continual_nystrom_retroactive']
 
     # Data assertions
     b, n, d = data.shape
@@ -94,36 +96,61 @@ def evaluate_model(N, E, B, H, data, model_type, layers, M=None, fixed_landmarks
     assert n >= N
     assert d >= E
 
-    all_data = data[:, :, :E]
-    data = data[:B, :2*N, :E]
-    # data = torch.permute(data, (0, 2, 1))
+    data = torch.permute(data, (0, 2, 1))
+    all_data = data[:, :E]
+    data = data[:B, :E, :2*N]
 
-    data_warmup = data[:, :N]  # data[:, :, :N]
-    data_inference = data[:, -N:]  # data[:, :, -N:]
+    data_warmup = data[:, :, :N]
+    data_inference = data[:, :, -N:]
 
     # model = init_model(model_type, layers, 1, N, H, E, M, fixed_landmarks, data, device="cuda").to("cuda")
     # flops, params = compute_flops_and_params(model, model_type, 1, E//H, N)
     flops, params = 0, 0
 
     # Refresh model
-    model = init_model(model_type, layers, B, N, H, E, M, fixed_landmarks, all_data, device="cuda")
+    model = init_model(model_type, B, N, H, E, M, fixed_landmarks, all_data, device="cuda")
 
-    if model_type in ['base_continual', 'continual_nystrom']:
+    if model_type in ['continual_nystrom_single', 'continual_nystrom_retroactive']:
         # Warmup data. Also sets the initial state for the continual models
         for _ in range(5):
-            _ = model(data_warmup, data_warmup, data_warmup)
+            _ = model(data_warmup)
 
         start_time = time.time()
         for _ in range(iterations):
-            _ = model(data_inference, data_inference, data_inference)
+            _ = model(data_inference)
         end_time = time.time()
-    else:
+    elif model_type in ['base_continual_single', 'base_continual_retroactive']:
+        data_warmup = torch.permute(data_warmup, (0, 2, 1))
+        data_inference = torch.permute(data_inference, (0, 2, 1))
+
+        # Warmup data. Also sets the initial state for the continual models
+        for _ in range(5):
+            _ = model(data_warmup)
+
+        start_time = time.time()
+        for _ in range(iterations):
+            _ = model(data_inference)
+        end_time = time.time()
+    elif model_type == 'base':
+        data = torch.permute(data, (0, 2, 1))
+        data_warmup = torch.permute(data_warmup, (0, 2, 1))
+        data_inference = torch.permute(data_inference, (0, 2, 1))
+
         for _ in range(5):
             _ = model(data_warmup, data_warmup, data_warmup)
         start_time = time.time()
         for _ in range(iterations):
             for data_index in range(data_inference.size()[1]):
                 data_window = data[:, data_index:data_index+N, :]
+                _ = model(data_window, data_window, data_window)
+        end_time = time.time()
+    else:
+        for _ in range(5):
+            _ = model(data_warmup, data_warmup, data_warmup)
+        start_time = time.time()
+        for _ in range(iterations):
+            for data_index in range(data_inference.size()[2]):
+                data_window = data[:, :, data_index:data_index+N]
                 _ = model(data_window, data_window, data_window)
         end_time = time.time()
 
@@ -142,58 +169,63 @@ if __name__ == '__main__':
         torch.save(data, data_path)
 
     # print("Transformer:")
-    # flops, params, running_time = evaluate_model(400, 50, 1, 1, data, "base", 1, iterations=20)
+    # flops, params, running_time = evaluate_model(400, 50, 1, 1, data, "base",  iterations=20)
     # print(running_time)
     #
-    # print("Continual Transformer:")
-    # flops, params, running_time = evaluate_model(400, 50, 1, 1, data, "base_continual", 1, iterations=20)
+    # print("Continual Transformer (single):")
+    # flops, params, running_time = evaluate_model(400, 50, 1, 1, data, "base_continual_single",  iterations=20)
+    # print(running_time)
+    #
+    # print("Continual Transformer (retroactive):")
+    # flops, params, running_time = evaluate_model(400, 50, 1, 1, data, "base_continual_retroactive", iterations=20)
     # print(running_time)
     #
     # print("Nystromformer:")
-    # flops, params, running_time = evaluate_model(400, 50, 1, 1, data, "nystromformer", 1, iterations=20, M=8, fixed_landmarks=True)
+    # flops, params, running_time = evaluate_model(500, 50, 1, 1, data, "nystromformer", iterations=20, M=8, fixed_landmarks=True)
     # print(running_time)
     #
-    # print("Continual Nystromformer:")
-    # flops, params, running_time = evaluate_model(400, 50, 1, 1, data, "continual_nystrom", 1, iterations=20, M=8, fixed_landmarks=True)
+    # print("Continual Nystromformer (single):")
+    # flops, params, running_time = evaluate_model(500, 50, 1, 1, data, "continual_nystrom_single", iterations=20, M=8, fixed_landmarks=True)
+    # print(running_time)
+    #
+    # print("Continual Nystromformer (retroactive):")
+    # flops, params, running_time = evaluate_model(500, 50, 1, 1, data, "continual_nystrom_retroactive", iterations=20, M=8, fixed_landmarks=True)
     # print(running_time)
     # exit(0)
 
     result_list = []
-    for N in range(300, 1001, 100):
+    for N in range(100, 3000, 100):
         for E in range(100, 201, 100):
-            # for num_layers in [1, 2]:
-            for model in ['base', 'base_continual']:
+            for model in ['base', 'base_continual_single', 'base_continual_retroactive']:
                 flops, params, running_time = evaluate_model(N, E, 1, 1, data, model, 1, iterations=N_ITERATIONS)
                 results = {'N': N,
                            'E': E,
-                           'num_layers': 1,
                            'model': model,
                            'M': 0,
                            'fixed_landmarks': False,
                            'flops': flops,
-                           'params': params,
-                           'running_time': running_time}
+                           }
                 print(results)
                 sys.stdout.flush()
                 result_list.append(results)
-            for model in ['nystromformer', 'continual_nystrom']:
+            for model in ['nystromformer', 'continual_nystrom_single', 'continual_nystrom_retroactive']:
                 for M in [2**i for i in range(1, math.ceil(math.log2(N)))]:
+                    M = 64
                     for fixed_landmarks in [True, False]:
-                        flops, params, running_time = evaluate_model(N, E, 1, 1, data, model, 1,
+                        flops, params, running_time = evaluate_model(N, E, 1, 1, data, model,
                                                                      M=M,
                                                                      fixed_landmarks=fixed_landmarks,
                                                                      iterations=N_ITERATIONS)
                         results = {'N': N,
                                    'E': E,
-                                   'num_layers': 1,
                                    'model': model,
                                    'M': M,
                                    'fixed_landmarks': fixed_landmarks,
                                    'flops': flops,
-                                   'params': params,
-                                   'running_time': running_time}
+                                   }
                         print(results)
                         sys.stdout.flush()
                         result_list.append(results)
+                    break
 
     pd.DataFrame.from_records(result_list).to_csv('results_runtime.csv')
