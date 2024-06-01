@@ -414,6 +414,7 @@ if __name__ == "__main__":
             args.model = model
             for num_layers in [1, 2]:
                 args.num_layers = num_layers
+                print(args)
                 main(args)
         for model in ["nystromformer", "continual_nystrom"]:
             args.model = model
@@ -422,10 +423,12 @@ if __name__ == "__main__":
 
                 args.num_layers = 1
                 args.fit_layer_epochs = [5]
+                print(args)
                 main(args)
 
                 args.num_layers = 2
                 args.fit_layer_epochs = [5, 5]
+                print(args)
                 main(args)
 
         args.fit_layer_epochs = []

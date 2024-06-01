@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import math
 import gc
+import random
 
 from torch.nn.modules.activation import MultiheadAttention
 from sklearn.cluster import KMeans
@@ -22,6 +23,18 @@ from torch import Tensor
 logger = getLogger(__name__)
 logger_once = getLogger(__name__, log_once=True)
 
+def split_number_in_list(number_to_split, elements_in_list):
+    min_element_in_list = number_to_split//elements_in_list
+
+    fraction_extra_elements = number_to_split/elements_in_list - min_element_in_list
+    n_extra_elements = math.floor(fraction_extra_elements*elements_in_list)
+
+    split_list_1 = [min_element_in_list]*(elements_in_list - n_extra_elements)
+    split_list_2 = [min_element_in_list+1]*n_extra_elements
+
+    split_list = split_list_1 + split_list_2
+    random.shuffle(split_list)
+    return split_list
 
 class NystromMultiheadAttention(CoModule, MultiheadAttention):
     def __init__(
@@ -75,9 +88,34 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
 
                 q_head_data = []
                 k_head_data = []
+
+                if num_points > 0:
+                    sample_list_q = split_number_in_list(num_points, q_data.size()[0]//self.batch_size)
+                    sample_list_k = split_number_in_list(num_points, q_data.size()[0]//self.batch_size)
                 for j in range(0, q_data.size()[0], self.batch_size):
-                    q_head_data.append(self.prepare_input(q_data[j:min(j+self.batch_size, q_data.size()[0])], self.W_q, index=i).flatten(0, 1).detach().cpu())
-                    k_head_data.append(self.prepare_input(k_data[j:min(j+self.batch_size, q_data.size()[0])], self.W_q, index=i).flatten(0, 1).detach().cpu())
+                    if num_points > 0:
+                        if sample_list_q[j] > 0:
+                            full_q_head_data = self.prepare_input(q_data[j:min(j + self.batch_size, q_data.size()[0])],
+                                                                  self.W_q, index=i).flatten(0, 1).detach().cpu()
+                            perm = torch.randperm(full_q_head_data.size(0))
+                            idx = perm[:sample_list_q[j]]
+                            full_q_head_data = full_q_head_data[idx]
+                            q_head_data.append(full_q_head_data)
+
+                        if sample_list_k[j] > 0:
+                            full_k_head_data = self.prepare_input(k_data[j:min(j + self.batch_size, q_data.size()[0])],
+                                                                  self.W_q, index=i).flatten(0, 1).detach().cpu()
+                            perm = torch.randperm(full_q_head_data.size(0))
+                            idx = perm[:sample_list_k[j]]
+                            full_k_head_data = full_k_head_data[idx]
+                            k_head_data.append(full_k_head_data)
+                    else:
+                        full_q_head_data = self.prepare_input(q_data[j:min(j + self.batch_size, q_data.size()[0])],
+                                                              self.W_q, index=i).flatten(0, 1).detach().cpu()
+                        full_k_head_data = self.prepare_input(k_data[j:min(j + self.batch_size, q_data.size()[0])],
+                                                              self.W_q, index=i).flatten(0, 1).detach().cpu()
+                        q_head_data.append(full_q_head_data)
+                        k_head_data.append(full_k_head_data)
 
                 q_head_data = torch.cat(q_head_data, dim=0)
                 k_head_data = torch.cat(k_head_data, dim=0)
