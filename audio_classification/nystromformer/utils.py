@@ -18,7 +18,7 @@ def qk_product(q, k, stable_exp=None):
     matrix = torch.exp(matrix)
     if torch.any(torch.isinf(matrix)):
         logger_once.warn("qk product produces overflow infinite after exponential")
-    elif torch.all(matrix == 0):
+    elif torch.any(torch.sum(matrix,0) == 0):
         logger_once.warn("qk product produces underflow zeros after exponential")
     return matrix
 

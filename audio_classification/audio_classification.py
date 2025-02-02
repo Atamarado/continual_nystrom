@@ -411,11 +411,15 @@ def calculate_accuracy(model, data_loader):
     with torch.no_grad():
         for i, data in enumerate(data_loader):
             features, labels = data
+            if features.size(0) < data_loader.batch_size:
+                continue # Skip the last batch to avoid any problems
             features = torch.permute(features, (0, 2, 1))
             features = features.to("cuda:"+str(SELECTED_GPUS[0]))
             labels = labels.to("cuda:"+str(SELECTED_GPUS[0]))
             predicted_labels = model(features)
             predicted_labels = torch.squeeze(predicted_labels, dim=-1)
+            if predicted_labels.ndim > 2:
+                predicted_labels = predicted_labels[:, :, -1]
             correct_count += torch.sum(torch.argmax(predicted_labels, dim=1) == torch.argmax(labels, dim=1))
             total_count += len(labels)
     accuracy = correct_count / total_count * 100  # percent
@@ -423,7 +427,7 @@ def calculate_accuracy(model, data_loader):
 
 MODEL_FOLDER = "saved_models"
 def get_model_path(config, folder=MODEL_FOLDER, fixed_landmarks=False, freeze_weights=False, extension="pth"):
-    if config.model in ['base', 'base_continual'] or not fixed_landmarks:
+    if config.model in ['base', 'base_continual']:
         return '%s/%s_%d_layers_seeds_%d_%d.%s' % (
             folder,
             config.model,
@@ -432,7 +436,7 @@ def get_model_path(config, folder=MODEL_FOLDER, fixed_landmarks=False, freeze_we
             config.data_seed,
             extension
         )
-    else:
+    elif fixed_landmarks:
         fit_layer_epochs = str(config.fit_layer_epochs).replace('[', '-').replace(']', '-')
         return '%s/%s_%d_layers_%d_landmarks_%s_%d_seeds_%d_%d.%s' % (
             folder,
@@ -445,6 +449,16 @@ def get_model_path(config, folder=MODEL_FOLDER, fixed_landmarks=False, freeze_we
             config.data_seed,
             extension
         )
+    else:
+        return '%s/%s_%d_layers_%d_landmarks_seeds_%d_%d.%s' % (
+            folder,
+            config.model,
+            config.num_layers,
+            config.num_landmarks,
+            config.model_seed,
+            config.data_seed,
+            extension,
+        )
 
 def seed_worker(_):
     worker_seed = torch.initial_seed() % 2**32
@@ -452,17 +466,17 @@ def seed_worker(_):
     random.seed(worker_seed)
 
 def compute_test_accuracy(model, test_loader):
-    if config.model == "continual_nystrom":
-        if config.num_layers == 1:
-            model[3][0].self_attn.forward_mode = "forward_steps"
-        else:
-            model[3][0][0][0].self_attn.forward_mode = "forward_steps"
+    # if config.model == "base_continual":
+    #     if config.num_layers == 1:
+    #         model.call_mode = "forward_steps"
+    #     else:
+    #         model[3][0][0][0].self_attn.call_mode = "forward_steps"
+    # if config.model == "continual_nystrom":
+    #     if config.num_layers == 1:
+    #         model[3][0].self_attn.forward_mode = "forward_steps"
+    #     else:
+    #         model[3][0][0][0].self_attn.forward_mode = "forward_steps"
     test_accuracy = calculate_accuracy(model, test_loader)
-    if config.model == "continual_nystrom":
-        if config.num_layers == 1:
-            model[3][0].self_attn.forward_mode = "forward"
-        else:
-            model[3][0][0][0].self_attn.forward_mode = "forward"
     return test_accuracy
 
 
@@ -479,6 +493,7 @@ def get_dataset(split, seed):
             return pickle.load(f)
     else:
         dataset = TorchGTZANDataset(split, seed)
+        os.makedirs(DATASET_FOLDER, exist_ok=True)
         with open(path, 'wb') as f:
             pickle.dump(dataset, f)
         return dataset
@@ -537,7 +552,7 @@ def train_fixed_landmarks(model, config, out_file, train_dataset, optimizer, cri
         for _ in range(num_epochs_fit):
             train_accuracy, best_val_accuracy = train_one_epoch(model, config, cum_epoch, total_epochs, optimizer,
                                                                 criterion, train_loader, val_loader, writer,
-                                                                best_val_accuracy, fixed_landmarks=True)
+                                                                best_val_accuracy, fixed_landmarks=True, freeze_weights=freeze_weights)
             cum_epoch += 1
 
     # Reload best model for test
@@ -558,7 +573,7 @@ def train_fixed_landmarks(model, config, out_file, train_dataset, optimizer, cri
     with open(out_file, 'wb') as f:
         pickle.dump(output_content, f)
 
-def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criterion, train_loader, val_loader, writer, best_val_accuracy, fixed_landmarks=False):
+def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criterion, train_loader, val_loader, writer, best_val_accuracy, fixed_landmarks=False, freeze_weights=False):
     running_loss = 0.0
     for i, data in enumerate(train_loader):
         # load data
@@ -593,7 +608,7 @@ def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criter
     if val_accuracy >= best_val_accuracy:
         best_val_accuracy = val_accuracy
         improved = True
-        torch.save(model.state_dict(), get_model_path(config, fixed_landmarks=fixed_landmarks))
+        torch.save(model.state_dict(), get_model_path(config, fixed_landmarks=fixed_landmarks, freeze_weights=freeze_weights))
 
     print('Epoch: %d/%d; Loss: %.2e; Train Acc: %.2f; Val Acc: %.2f%s' % (
         epoch_number + 1,
@@ -606,7 +621,7 @@ def train_one_epoch(model, config, epoch_number, total_epochs, optimizer, criter
 
     return train_accuracy, best_val_accuracy
 
-def torch_train(config, folder="raw_results_2"):
+def torch_train(config, folder="raw_results"):
     print("\n\n\n" + str(config))
 
     assert config.model in ["base", "base_continual", "nystromformer", "continual_nystrom"]
@@ -738,6 +753,7 @@ def torch_train(config, folder="raw_results_2"):
         "test_accuracy": test_accuracy,
     }
     dump_file_path = get_model_path(config, folder, False, False, extension="pkl")
+    os.makedirs(folder, exist_ok=True)
     with open(dump_file_path, 'wb') as f:
         pickle.dump(output_content, f)
 
@@ -747,7 +763,7 @@ def torch_train(config, folder="raw_results_2"):
 
         if config.freeze_weights in ["true", "both"] and config.fit_layer_epochs != []:
             train_fixed_landmarks(model, config,
-                                  get_model_path(config, "raw_results", True, True, "pkl"),
+                                  get_model_path(config, folder, True, True, "pkl"),
                                   train_dataset, optimizer, criterion, train_loader, val_loader,
                                   test_loader, writer, best_val_accuracy, freeze_weights=True)
 
@@ -756,7 +772,7 @@ def torch_train(config, folder="raw_results_2"):
 
         if config.freeze_weights in ["false", "both"] and config.fit_layer_epochs != []:
             train_fixed_landmarks(model, config,
-                                  get_model_path(config, "raw_results", True, False, "pkl"),
+                                  get_model_path(config, folder, True, False, "pkl"),
                                   train_dataset, optimizer, criterion, train_loader, val_loader,
                                   test_loader, writer, best_val_accuracy, freeze_weights=False)
 
@@ -844,6 +860,10 @@ if __name__ == "__main__":
         (
             'https://drive.google.com/u/0/uc?id=16JrWEedwaZFVZYvn1woPKCuWx85Ghzkp',
             VGGISH_FOLDER+'/vggish_audioset_weights_without_fc2.h5'
+        ),
+        (
+            'https://drive.google.com/u/0/uc?id=1QS0EQzLTF7IgMeS1n0g2BbMIr_a3cCA8',
+            VGGISH_FOLDER+'/fine_tuned_vggish.h5'
         )
     ]
     for url, file_path in download_list:
@@ -872,25 +892,26 @@ if __name__ == "__main__":
 
     for data_seed in range(5):
         config.data_seed = data_seed
-        for model_seed in range(5):
-            config.model_seed = model_seed
-            for model in ["base", "base_continual"]:
-                config.model = model
-                for num_layers in [1, 2]:
-                    config.num_layers = num_layers
-                    torch_train(config)
-            for model in ["nystromformer", "continual_nystrom"]:
-                config.model = model
-                for num_landmarks in [2, 4, 8, 16, 32, 64]:
-                    config.num_landmarks = num_landmarks
+        # # for model_seed in range(5):
+        # #     config.model_seed = model_seed
+        # for model in ["base", "base_continual"]:
+        #     config.model = model
+        #     for num_layers in [1, 2]:
+        #         config.num_layers = num_layers
+        #         torch_train(config)
+        for model in ["nystromformer", "continual_nystrom"]:
+            config.model = model
+            # for num_landmarks in [2, 4, 8, 16, 32, 64]:
+            for num_landmarks in [64]:
+                config.num_landmarks = num_landmarks
 
-                    config.num_layers = 1
-                    config.fit_layer_epochs = [25]
-                    torch_train(config)
+                config.num_layers = 1
+                config.fit_layer_epochs = []
+                torch_train(config)
 
-                    config.num_layers = 2
-                    config.fit_layer_epochs = [25, 25]
-                    torch_train(config)
+                config.num_layers = 2
+                config.fit_layer_epochs = []
+                torch_train(config)
 
-            config.fit_layer_epochs = []
+        config.fit_layer_epochs = []
 

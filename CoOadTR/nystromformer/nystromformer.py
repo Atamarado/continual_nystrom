@@ -23,19 +23,6 @@ from torch import Tensor
 logger = getLogger(__name__)
 logger_once = getLogger(__name__, log_once=True)
 
-def split_number_in_list(number_to_split, elements_in_list):
-    min_element_in_list = number_to_split//elements_in_list
-
-    fraction_extra_elements = number_to_split/elements_in_list - min_element_in_list
-    n_extra_elements = math.floor(fraction_extra_elements*elements_in_list)
-
-    split_list_1 = [min_element_in_list]*(elements_in_list - n_extra_elements)
-    split_list_2 = [min_element_in_list+1]*n_extra_elements
-
-    split_list = split_list_1 + split_list_2
-    random.shuffle(split_list)
-    return split_list
-
 class NystromMultiheadAttention(CoModule, MultiheadAttention):
     def __init__(
             self,
@@ -73,80 +60,43 @@ class NystromMultiheadAttention(CoModule, MultiheadAttention):
         self.fixed_landmarks = fixed_landmarks
         self.compute_inverse = compute_inverse
 
-    def fix_landmarks(self, q_data, k_data=None, alg="base", kmeans_attempts=3, seed=0, num_points=0):
+    def fix_landmarks(self, q_data, k_data=None, alg="base", kmeans_attempts=3, seed=0):
         self.fixed_landmarks = True
         if k_data is None:
             k_data = q_data
 
-        q_tilde = []
-        k_tilde = []
+        q_data = q_data.cpu()
+        k_data = k_data.cpu()
+
         if alg == "kmeans":
-            for i in range(self.num_head):
-                # Clear caches, as this operation may require the storage of big amounts of data
-                torch.cuda.empty_cache()
-                gc.collect()
+            # for i in range(self.num_head):
+            #     # Clear caches, as this operation may require the storage of big amounts of data
+            #     torch.cuda.empty_cache()
+            #     gc.collect()
 
-                q_head_data = []
-                k_head_data = []
+            q_head_data = q_data
+            k_head_data = k_data
 
-                if num_points > 0:
-                    sample_list_q = split_number_in_list(num_points, q_data.size()[0]//self.batch_size)
-                    sample_list_k = split_number_in_list(num_points, q_data.size()[0]//self.batch_size)
-                for j in range(0, q_data.size()[0], self.batch_size):
-                    if num_points > 0:
-                        if sample_list_q[j] > 0:
-                            full_q_head_data = self.prepare_input(q_data[j:min(j + self.batch_size, q_data.size()[0])],
-                                                                  self.W_q, index=i).flatten(0, 1).detach().cpu()
-                            perm = torch.randperm(full_q_head_data.size(0))
-                            idx = perm[:sample_list_q[j]]
-                            full_q_head_data = full_q_head_data[idx]
-                            q_head_data.append(full_q_head_data)
+            q_clusters = KMeans(n_clusters=self.num_landmarks,
+                                n_init=kmeans_attempts,
+                                random_state=seed).fit(q_head_data).cluster_centers_
+            k_clusters = KMeans(n_clusters=self.num_landmarks,
+                                n_init=kmeans_attempts,
+                                random_state=seed).fit(k_head_data).cluster_centers_
 
-                        if sample_list_k[j] > 0:
-                            full_k_head_data = self.prepare_input(k_data[j:min(j + self.batch_size, q_data.size()[0])],
-                                                                  self.W_q, index=i).flatten(0, 1).detach().cpu()
-                            perm = torch.randperm(full_k_head_data.size(0))
-                            idx = perm[:sample_list_k[j]]
-                            full_k_head_data = full_k_head_data[idx]
-                            k_head_data.append(full_k_head_data)
-                    else:
-                        full_q_head_data = self.prepare_input(q_data[j:min(j + self.batch_size, q_data.size()[0])],
-                                                              self.W_q, index=i).flatten(0, 1)
-                        full_k_head_data = self.prepare_input(k_data[j:min(j + self.batch_size, q_data.size()[0])],
-                                                              self.W_q, index=i).flatten(0, 1)
-                        q_head_data.append(full_q_head_data)
-                        k_head_data.append(full_k_head_data)
-
-                q_head_data = torch.cat(q_head_data, dim=0).cpu()
-                k_head_data = torch.cat(k_head_data, dim=0).cpu()
-
-                if num_points > 0:
-                    index = torch.randperm(q_head_data.size()[0], generator=torch.Generator().manual_seed(seed))[:num_points]
-                    q_head_data = q_head_data[index]
-                    index = torch.randperm(q_head_data.size()[0], generator=torch.Generator().manual_seed(seed+1))[:num_points]
-                    k_head_data = k_head_data[index]
-
-                q_clusters = KMeans(n_clusters=self.num_landmarks,
-                                    n_init=kmeans_attempts,
-                                    random_state=seed).fit(q_head_data).cluster_centers_
-                k_clusters = KMeans(n_clusters=self.num_landmarks,
-                                    n_init=kmeans_attempts,
-                                    random_state=seed).fit(k_head_data).cluster_centers_
-
-                q_tilde.append(torch.tensor(q_clusters))
-                k_tilde.append(torch.tensor(k_clusters))
+            q_tilde = torch.tensor(q_clusters).repeat(self.batch_size, 1, 1).type(torch.float32).to(self.device)
+            k_tilde = torch.tensor(k_clusters).repeat(self.batch_size, 1, 1).type(torch.float32).to(self.device)
         else:
             raise NotImplementedError("Only kmeans is implemented")
 
-        q_tilde = torch.stack(q_tilde, dim=0).type(torch.float32).to(self.device)
-        k_tilde = torch.stack(k_tilde, dim=0).type(torch.float32).to(self.device)
-
-        # Repeat for all samples in the batch size
-        q_tilde = q_tilde.repeat(self.batch_size, 1, 1)
-        k_tilde = k_tilde.repeat(self.batch_size, 1, 1)
-
+        # q_tilde = torch.stack(q_tilde, dim=0).type(torch.float32).to(self.device)
+        # k_tilde = torch.stack(k_tilde, dim=0).type(torch.float32).to(self.device)
         Gamma_D = torch.nn.functional.softmax(torch.bmm(q_tilde, k_tilde.transpose(-1, -2)), dim=-1)
         Gamma_D_inv = iterative_inv(Gamma_D)
+
+        # # Repeat for all samples in the batch size
+        # q_tilde = q_tilde.repeat(self.num_head, 1, 1, 1)
+        # k_tilde = k_tilde.repeat(self.num_head, 1, 1, 1)
 
         self.q_tilde = q_tilde
         self.k_tilde = k_tilde

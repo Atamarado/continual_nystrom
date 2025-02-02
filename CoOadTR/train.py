@@ -312,5 +312,7 @@ def evaluate(model, criterion, data_loader, device, logger, args, epoch, nprocs=
             cls_name = all_class_name[i]
             logger.output_print("{}: {:.4f}".format(cls_name, ap))
     stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    stats["mAP"] = map
+    stats["mcAP"] = cap
 
     return stats

@@ -32,7 +32,8 @@ def CoVisionTransformer(
     with_motion=True,
     num_channels=3072,
     nystrom=False,
-    num_landmarks=10
+    num_landmarks=10,
+    batch_size=1,
 ):
 
     assert embedding_dim % num_heads == 0
@@ -63,7 +64,8 @@ def CoVisionTransformer(
             device,
             dropout_rate,
             attn_dropout_rate,
-            num_landmarks,
+            num_landmarks=num_landmarks,
+            batch_size=batch_size,
         )
     else:
         encoder = CoTransformerModel(

@@ -3,10 +3,10 @@ import torch
 import torch.nn as nn
 
 from continual import RecyclingPositionalEncoding
-from .nystromformer.transformer import (SingleOutputNystromTransformerEncoderLayer,
+from nystromformer.transformer import (SingleOutputNystromTransformerEncoderLayer,
                                        NystromTransformerEncoderLayerFactory,
                                        NystromTransformerEncoder)
-from .nystromformer.nystromformer import LearnedPositionalEncoding
+from nystromformer.nystromformer import LearnedPositionalEncoding
 
 def CoNystromTransformerModel(
     embed_dim,
@@ -104,7 +104,7 @@ def CoVisionTransformer(
         forward_update_index_steps=1,
     )
 
-    pe_dropout = nn.Dropout(p=dropout_rate)
+    # pe_dropout = nn.Dropout(p=dropout_rate)
 
     encoder = CoTransformerModel(
         embedding_dim,
@@ -120,7 +120,7 @@ def CoVisionTransformer(
     return co.Sequential(
         linear_encoding,
         position_encoding,
-        pe_dropout,
+        # pe_dropout,
         encoder,
         pre_head_ln,
         mlp_head,
@@ -186,7 +186,7 @@ def CoNystromVisionTransformer(
             sequence_len
         )
 
-    pe_dropout = nn.Dropout(p=dropout_rate)
+    # pe_dropout = nn.Dropout(p=dropout_rate)
 
     encoder = CoNystromTransformerModel(
         embedding_dim,
@@ -207,7 +207,7 @@ def CoNystromVisionTransformer(
         return co.Sequential(
             linear_encoding,
             position_encoding,
-            pe_dropout,
+            # pe_dropout,
             encoder,
             pre_head_ln,
             mlp_head,
@@ -216,7 +216,7 @@ def CoNystromVisionTransformer(
         return nn.Sequential(
             linear_encoding,
             position_encoding,
-            pe_dropout,
+            # pe_dropout,
             encoder,
             pre_head_ln,
             mlp_head,
@@ -243,7 +243,7 @@ def NonCoVisionTransformer(
         sequence_len
     )
 
-    pe_dropout = nn.Dropout(p=dropout_rate)
+    # pe_dropout = nn.Dropout(p=dropout_rate)
 
     encoder = CoTransformerModel(
         embedding_dim,
@@ -259,7 +259,7 @@ def NonCoVisionTransformer(
     return nn.Sequential(
         linear_encoding,
         position_encoding,
-        pe_dropout,
+        # pe_dropout,
         encoder,
         pre_head_ln,
         mlp_head,

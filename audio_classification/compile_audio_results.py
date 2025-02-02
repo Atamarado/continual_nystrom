@@ -13,7 +13,11 @@ if __name__ == "__main__":
     res_list = []
     for file in file_experiment:
         with open(os.path.join(RESULTS_FOLDER, file), 'rb') as f:
-            results = pickle.load(f)
+            try:
+                results = pickle.load(f)
+            except:
+                print("Cannot open path "+os.path.join(RESULTS_FOLDER, file))
+                continue
 
         config = results["config"]
 
@@ -39,7 +43,8 @@ if __name__ == "__main__":
     res_df = res_df.groupby(CONFIG_COLS).agg({
         'train_accuracy': ['mean', 'std'],
         'val_accuracy': ['mean', 'std'],
-        'test_accuracy': ['mean', 'std']
+        'test_accuracy': ['mean', 'std'],
+        'data_seed': ['count'],
     }).reset_index()
 
     res_df.to_csv('results_audio_classification.csv')

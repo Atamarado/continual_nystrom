@@ -92,6 +92,7 @@ def CoNystromTransformerModel(
     attn_dropout_rate=0.1,
     sequence_len=64,
     num_landmarks=10,
+    batch_size=1,
 ):
     assert depth in {1, 2}
 
@@ -107,7 +108,8 @@ def CoNystromTransformerModel(
             device=device,
             dtype=None,
             single_output_forward=True,
-            num_landmarks=num_landmarks
+            num_landmarks=num_landmarks,
+            batch_size=batch_size,
         )
 
     # depth == 2
@@ -120,7 +122,8 @@ def CoNystromTransformerModel(
         activation=nn.GELU(),
         device=device,
         dtype=None,
-        num_landmarks=num_landmarks
+        num_landmarks=num_landmarks,
+        batch_size=batch_size,
     )
     return NystromTransformerEncoder(layer_factory, num_layers=depth)
 
