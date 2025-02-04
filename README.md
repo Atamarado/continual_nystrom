@@ -27,7 +27,13 @@ Download the Action Recognition Dataset THUMOS-14:
 
 Unzip in 'CoOadTR/data/thumos_anet' and 'CoOadTR/data/thumos_kin', respectively.
 
-# Cite this work
+## Run the scripts
+
+If you have set up the environment and downloaded the required datasets, you can run the training and evaluation of some predefined models:
+* For the Audio Classification task, run ``python audio_classification/audio_classification.py``
+* For the Online Action Detection, run ``python CoOadTR/main.py``
+
+## Cite this work
 
 If you use or modify this code, you can cite us in LaTex by using:
 
