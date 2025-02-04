@@ -19,13 +19,14 @@ ipython==8.18.1
 ```
 
 ## Download the data
-Download the Audio Classification Dataset [GTZAN dataset from Kaggle](https://www.kaggle.com/datasets/andradaolteanu/gtzan-dataset-music-genre-classification?resource=download-directory) and unzip in the directory in 'audio_classification/data/gtzan'.
+Download the Audio Classification Dataset [GTZAN dataset from Kaggle](https://www.kaggle.com/datasets/andradaolteanu/gtzan-dataset-music-genre-classification?resource=download-directory) and unzip in the directory in ``audio_classification/data/gtzan``.
+Only the files ``features_30_sec.csv`` and the folder ``genres_original`` are required for this project.
 
 Download the Action Recognition Dataset THUMOS-14:
 * [Anet features](https://drive.google.com/file/d/1Ms709_RSfT2lezPp-0TTkSJCfF-XLeOk/view)
 * [Kinetics features](https://drive.google.com/file/d/1jk6eiILBISd3GvG_ZNX8kop-DNSZZPXF/view)
 
-Unzip in 'CoOadTR/data/thumos_anet' and 'CoOadTR/data/thumos_kin', respectively.
+Unzip in ``CoOadTR/data/thumos_anet`` and ``CoOadTR/data/thumos_kin``, respectively.
 
 ## Run the scripts
 
