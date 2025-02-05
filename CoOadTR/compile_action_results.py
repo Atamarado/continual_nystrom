@@ -57,6 +57,6 @@ if __name__ == '__main__':
         'mcAP': ['mean', 'std'],
         'seed': ['count'],
     }).reset_index()
-    pass
+    res_df.to_csv('results_oad.csv')
 
 

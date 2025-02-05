@@ -64,7 +64,7 @@ def get_args_parser():
     )  # 0.5
 
     parser.add_argument(
-        "--num_landmarks", default=10, type=int, help="number of landmarks to use when using the nystrom method"
+        "--num_landmarks", default=10, type=int, help="number of landmarks used for the nyström-based transformers"
     )
     parser.add_argument(
         "--enc_layers", default=64, type=int, help="Number of enc_layers"
@@ -131,7 +131,7 @@ def get_args_parser():
         "--device", default="cuda", help="device to use for training / testing"
     )
 
-    parser.add_argument("--seed", default=20, type=int)
+    parser.add_argument("--seed", default=20, type=int, help="seed used to initialize the model weights")
     parser.add_argument("--resume", default="", help="resume from checkpoint")
     parser.add_argument(
         "--start_epoch", default=1, type=int, metavar="N", help="start epoch"
@@ -152,8 +152,12 @@ def get_args_parser():
 
     parser.add_argument("--model", default='base', type=str,
                         help='[base, base_continual, nystromformer, continual_nystrom]')
-    parser.add_argument("--fit_layer_epochs", default=[], type=ast.literal_eval)
+    parser.add_argument("--fit_layer_epochs", default=[], type=ast.literal_eval,
+                        help="Number of epochs used to fine-tune the model after the landmarks in one layer are frozen. Provide a list with the number of epochs for every layer")
     parser.add_argument("--freeze_weights", default="both", type=str,
-                        help='[both, true, false]')
+                        help='[both, true, false].'
+                             'If `true`, the model will freeze the weights after the --epochs are performed.'
+                             'If `false`, the model will not freeze the weights and will use have continual landmarks'
+                             'both tries both configurations')
     # 'env://'
     return parser

@@ -905,11 +905,11 @@ if __name__ == "__main__":
                     config.num_landmarks = num_landmarks
 
                     config.num_layers = 1
-                    config.fit_layer_epochs = []
+                    config.fit_layer_epochs = [25]
                     torch_train(config)
 
                     config.num_layers = 2
-                    config.fit_layer_epochs = []
+                    config.fit_layer_epochs = [25, 25]
                     torch_train(config)
 
         config.fit_layer_epochs = []
