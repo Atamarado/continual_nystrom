@@ -432,35 +432,35 @@ if __name__ == "__main__":
     # main(args)
     # exit(0)
 
-    # for seed in range(5):
-    #     args.seed = seed
-    # for feature in ["anet", "kin"]:
-    # args.feature = feature
-    for model in ["base", "base_continual"]:
-        args.model = model
-        for num_layers in [1, 2]:
-            args.num_layers = num_layers
-            args_to_print = copy.copy(args)
-            del args_to_print.test_session_set
-            print(args_to_print)
-            main(args)
-    for model in ["nystromformer", "continual_nystrom"]:
-        args.model = model
-        for num_landmarks in [2, 4, 8, 16, 32]:
-            args.num_landmarks = num_landmarks
+    for seed in range(5):
+        args.seed = seed
+        for feature in ["anet", "kin"]:
+            args.feature = feature
+            for model in ["base", "base_continual"]:
+                args.model = model
+                for num_layers in [1, 2]:
+                    args.num_layers = num_layers
+                    args_to_print = copy.copy(args)
+                    del args_to_print.test_session_set
+                    print(args_to_print)
+                    main(args)
+            for model in ["nystromformer", "continual_nystrom"]:
+                args.model = model
+                for num_landmarks in [2, 4, 8, 16, 32]:
+                    args.num_landmarks = num_landmarks
 
-            args.num_layers = 1
-            args.fit_layer_epochs = [5]
-            args_to_print = copy.copy(args)
-            del args_to_print.test_session_set
-            print(args_to_print)
-            main(args)
+                    args.num_layers = 1
+                    args.fit_layer_epochs = [5]
+                    args_to_print = copy.copy(args)
+                    del args_to_print.test_session_set
+                    print(args_to_print)
+                    main(args)
 
-            args.num_layers = 2
-            args.fit_layer_epochs = [5, 5]
-            args_to_print = copy.copy(args)
-            del args_to_print.test_session_set
-            print(args_to_print)
-            main(args)
+                    args.num_layers = 2
+                    args.fit_layer_epochs = [5, 5]
+                    args_to_print = copy.copy(args)
+                    del args_to_print.test_session_set
+                    print(args_to_print)
+                    main(args)
 
     args.fit_layer_epochs = []

@@ -892,26 +892,24 @@ if __name__ == "__main__":
 
     for data_seed in range(5):
         config.data_seed = data_seed
-        # # for model_seed in range(5):
-        # #     config.model_seed = model_seed
-        # for model in ["base", "base_continual"]:
-        #     config.model = model
-        #     for num_layers in [1, 2]:
-        #         config.num_layers = num_layers
-        #         torch_train(config)
-        for model in ["nystromformer", "continual_nystrom"]:
-            config.model = model
-            # for num_landmarks in [2, 4, 8, 16, 32, 64]:
-            for num_landmarks in [64]:
-                config.num_landmarks = num_landmarks
+        for model_seed in range(5):
+            config.model_seed = model_seed
+            for model in ["base", "base_continual"]:
+                config.model = model
+                for num_layers in [1, 2]:
+                    config.num_layers = num_layers
+                    torch_train(config)
+            for model in ["nystromformer", "continual_nystrom"]:
+                config.model = model
+                for num_landmarks in [2, 4, 8, 16, 32, 64]:
+                    config.num_landmarks = num_landmarks
 
-                config.num_layers = 1
-                config.fit_layer_epochs = []
-                torch_train(config)
+                    config.num_layers = 1
+                    config.fit_layer_epochs = []
+                    torch_train(config)
 
-                config.num_layers = 2
-                config.fit_layer_epochs = []
-                torch_train(config)
+                    config.num_layers = 2
+                    config.fit_layer_epochs = []
+                    torch_train(config)
 
         config.fit_layer_epochs = []
-
