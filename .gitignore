@@ -2,7 +2,12 @@
 .idea/
 
 # All data folders
-**/data/
+**/data/*
+
+# Add an exception for data_info_new.json, as it's necessary to decide the splits for CoOadTR
+!CoOadTR/data/data_info_new.json
+!CoOadTR/
+!CoOadTR/data/
 
 # Weight files
 *.h5
