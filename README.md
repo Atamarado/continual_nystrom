@@ -2,25 +2,21 @@
 
 Recommended environment:
 ```
-python==3.11.8
-pytorch==2.1.2
-torchvision==0.16.2
-torchaudio==2.1.2
-tensorflow==2.12.1
-continual-inference==1.2.3
-gdown==5.1.0
-librosa==0.10.1
-pandas==2.2.1
-audioread==3.0.1
-resampy==0.4.2
-ipdb==0.13.8
-typing-extensions==4.5.0
-ipython==8.18.1
+python==3.13
+torch==2.7.0
+torchvision==0.22.0
+torchaudio==2.7.0
+ipdb==0.13.13
+scikit-learn==1.6.1
+pandas==2.2.3
+matplotlib==3.10.3
 ```
 
 ## Download the data
-Download the Audio Classification Dataset [GTZAN dataset from Kaggle](https://www.kaggle.com/datasets/andradaolteanu/gtzan-dataset-music-genre-classification?resource=download-directory) and unzip in the directory in ``audio_classification/data/gtzan``.
-Only the files ``features_30_sec.csv`` and the folder ``genres_original`` are required for this project.
+
+TODO: Determine the process to get the preprocessed features 
+<!-- Download the Audio Classification Dataset [GTZAN dataset from Kaggle](https://www.kaggle.com/datasets/andradaolteanu/gtzan-dataset-music-genre-classification?resource=download-directory) and unzip in the directory in ``audio_classification/data/gtzan``.
+Only the files ``features_30_sec.csv`` and the folder ``genres_original`` are required for this project. -->
 
 Download the Action Recognition Dataset THUMOS-14:
 * [Anet features](https://drive.google.com/file/d/1Ms709_RSfT2lezPp-0TTkSJCfF-XLeOk/view)

@@ -38,7 +38,7 @@ class SetCriterion(nn.Module):
         self.size_average = True
         self.logsoftmax = nn.LogSoftmax(dim=1)
 
-    def loss_labels(self, input, targets, name):
+    def loss_labels(self, input, targets, name=None):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
         """
@@ -63,9 +63,12 @@ class SetCriterion(nn.Module):
                 loss_ce = torch.sum(output)
         if torch.isnan(loss_ce).sum() > 0:
             set_trace()
-        losses = {name: loss_ce}
 
-        return losses
+        if name:
+            losses = {name: loss_ce}
+            return losses
+        else:
+            return loss_ce
 
     def loss_labels_decoder(self, input, targets, name):
         """Classification loss (NLL)

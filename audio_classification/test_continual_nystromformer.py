@@ -1,13 +1,13 @@
 import torch
 import math
 
-from nystromformer.continual_nystromformer import (
+from nystromformer import (
     _scaled_dot_product_attention_step,
     _scaled_dot_product_attention_default_state,
     State
 )
-from nystromformer.nystromformer import _scaled_dot_product_attention, get_landmarks
-from nystromformer.utils import qk_product, iterative_inv, odot
+from nystromformer import _scaled_dot_product_attention, get_landmarks
+from nystromformer import qk_product, iterative_inv, odot
 
 def compute_diff(pred, target, mode="l2"):
     assert mode in ["l1", "l2"]
