@@ -6,10 +6,26 @@ This repository contains all the code to recreate the experiments described in t
 
 We provide in [install.sh](install.sh) a shell script to prepare a conda environment, and download the datasets necessary to run the code. Consequently, a conda installation is a necessary prerequisite. This code only offers support for computers with at least one GPU installed.
 
-## Run trainings
-All executions call the script [main.py](main.py), with different configurations specified in the file [config.py](config.py). We provide a shell script to run multiple executions sequentially or in parallel (one for every GPU available) called [run_parallel.sh](run_parallel.sh). Remember to activate the `continual_nystrom` environment before running the script
+To run the installation script, execute the following command:
+```bash
+bash -i install.sh
+```
 
-This script uses [config_list_generator.py](config_list_generator.py) to generate the training configurations that are being executed. We provide a simple example of an execution list, which can be customized.
+## Run trainings
+All executions call the script [main.py](main.py), with different configurations specified in the file [config.py](config.py). Remember to activate the `continual_nystrom` environment before running the script.
+
+For example, if we want to execute the training of a Continual Nyströmformer with two layers and four landmarks for the GTZAN dataset, to run the following commands:
+```bash
+conda activate continual_nystrom
+python main.py --model continual_nystrom --num_layers 2 --num_landmarks 4 --dataset gtzan
+```
+
+We provide a shell script to run multiple executions sequentially or in parallel (one for every GPU available) called [run_parallel.sh](run_parallel.sh). This script uses [config_list_generator.py](config_list_generator.py) to generate the training configurations that are being executed. We provide a simple example of an execution list, which can be customized.
+
+To run the script to execute multiple trainings, execute the following command:
+```bash
+bash -i run_parallel.sh
+```
 
 ### Multi-GPU configuration
 By default, only the first GPU installed will be used for the trainings sequentially. If you want to enable parallel executions and use more GPUs, it is necessary to configure the files [all_gpus.txt](all_gpus.txt) and [gpus.txt](gpus.txt):
