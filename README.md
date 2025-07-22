@@ -24,7 +24,7 @@ We provide a shell script to run multiple executions sequentially or in parallel
 
 To run the script to execute multiple trainings, execute the following command:
 ```bash
-bash -i run_parallel.sh
+bash run_parallel.sh
 ```
 
 ### Multi-GPU configuration
