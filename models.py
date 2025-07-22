@@ -149,7 +149,6 @@ def NonCoNystromVisionTransformer(
         fixed_landmarks=fixed_landmarks,
     )
 
-# TODO: Decide on positional encoding
 class LearnedPositionalEncoding(co.CoModule, nn.Module):
     def __init__(self, max_position_embeddings, embedding_dim, seq_length):
         super(LearnedPositionalEncoding, self).__init__()
@@ -288,12 +287,6 @@ def get_audio_model(config, training_dataset=None):
             input_dim = 128
             out_dim = 10
             embed_dim = 192
-        # case 'halcor':
-        #     from dataset_halcor import SEQ_LEN
-        #     seq_len = SEQ_LEN if config.seq_len <= 0 else config.seq_len
-        #     input_dim = 50
-        #     out_dim = 1
-        #     embed_dim = 128
         case 'electricity':
             seq_len = 64 if config.seq_len <= 0 else config.seq_len
             input_dim = 376

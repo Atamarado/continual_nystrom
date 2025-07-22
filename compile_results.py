@@ -1,14 +1,10 @@
 import os
 import pickle
 import pandas as pd
-import torch
 
 task = 'electricity' # CoOadTR, audio_classification, electricity
 
 RESULTS_FOLDER = task + '/raw_results'
-
-# CONFIG_COLS = ['model', 'num_layers', 'num_landmarks', 'fit_layer_epochs', 'freeze_weights']
-ACC_COLS = ['train_accuracy', 'val_accuracy', 'test_accuracy']
 
 def summarize_results(results_folder=RESULTS_FOLDER):
     match task:

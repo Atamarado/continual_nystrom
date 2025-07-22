@@ -50,7 +50,7 @@ assign_jobs_to_gpus() {
       fi
     done
 
-    sleep 1  # Wait some time before checking for available GPUs again
+    sleep 10  # Wait some time before checking for available GPUs again
 
     # Check if any job has finished and free up the GPU
     for gpu_index in "${all_gpus[@]}"; do

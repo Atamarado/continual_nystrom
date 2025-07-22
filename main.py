@@ -28,7 +28,6 @@ from CoOadTR.dataset import TRNTHUMOSDataLayer
 from CoOadTR import util as utl
 from CoOadTR.utils import frame_level_map_n_cap
 
-# from dataset_halcor import get_datasets as get_datasets_halcor
 from dataset_electricity import get_datasets as get_datasets_electricity
 
 from config import get_config
@@ -56,21 +55,34 @@ def forward_data(model, config, data, fill_batch=False, test_mode=False):
     match config.dataset:
         case 'gtzan' | 'thumos':
             out = torch.squeeze(out, dim=-1)
-        case 'halcor' | 'electricity':
+        case 'electricity':
             out = torch.squeeze(out)
 
     return out_target, out
 
 def get_transformer_modules(model, config):
     modules = []
-    if config.num_layers == 1:
-        modules.append(model[2][0].self_attn)
+    match config.dataset:
+        case 'gtzan' | 'electricity':
+            if config.num_layers == 1:
+                modules.append(model[2][0].self_attn)
 
-    elif config.num_layers == 2:
-        modules.append(model[2].layers[0][0].self_attn)
-        modules.append(model[2].layers[1].fn[0].self_attn)
-    else:
-        raise Exception('Invalid number of layers')
+            elif config.num_layers == 2:
+                modules.append(model[2].layers[0][0].self_attn)
+                modules.append(model[2].layers[1].fn[0].self_attn)
+            else:
+                raise Exception('Invalid number of layers')
+        case 'thumos':
+            if config.num_layers == 1:
+                modules.append(model[3][0].self_attn)
+
+            elif config.num_layers == 2:
+                modules.append(model[3].layers[0][0].self_attn)
+                modules.append(model[3].layers[1].fn[0].self_attn)
+            else:
+                raise Exception('Invalid number of layers')
+        case _:
+            raise NotImplementedError
     return modules
 
 def clean_state(model, config):
@@ -175,28 +187,6 @@ def get_data_loaders(config):
 
             test_loader = None
 
-        # case "halcor":
-        #     from dataset_halcor import SCALER, SCALE_Y
-        #     g = torch.Generator()
-        #     g.manual_seed(config.data_seed)
-        #     train_dataset, test_dataset, _, _ = get_datasets_halcor(scaler=SCALER, scale_y=SCALE_Y, seq_len=config.seq_len)
-        #     train_loader = torch.utils.data.DataLoader(
-        #         train_dataset,
-        #         batch_size=config.batch_size,
-        #         shuffle=True,
-        #         # num_workers=config.batch_size,
-        #         worker_init_fn=seed_worker,
-        #         generator=g
-        #     )
-        #     val_loader = torch.utils.data.DataLoader(
-        #         test_dataset,
-        #         batch_size=config.batch_size,
-        #         shuffle=False,
-        #         # num_workers=config.batch_size'],
-        #         worker_init_fn=seed_worker,
-        #         generator=g
-        #     )
-        #     test_loader = None
         case "electricity":
             g = torch.Generator()
             g.manual_seed(config.data_seed)
@@ -231,19 +221,21 @@ def get_data_loaders(config):
 
 def get_model(config, training_dataset=None):
     match config.dataset:
-        case 'gtzan' | 'halcor' | 'electricity':
+        case 'gtzan' | 'electricity':
             model = get_audio_model(config, training_dataset=training_dataset)
             model = model.to("cuda")
             return model
         case 'thumos':
-            return get_thumos_model(config)
+            model = get_thumos_model(config)
+            model = model.to("cuda")
+            return model
         case _:
             raise NotImplementedError
     return
 
 def get_optimizer(config, model):
     match config.dataset:
-        case 'gtzan' | 'halcor' | 'electricity':
+        case 'gtzan' | 'electricity':
             return torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
         case 'thumos':
             return torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
@@ -265,7 +257,7 @@ def get_criterion(config):
             ).to(config.device)
             criterion = criterion.loss_labels
             return criterion
-        case 'halcor' | 'electricity':
+        case 'electricity':
             return nn.HuberLoss()
         case _:
             raise NotImplementedError
@@ -273,7 +265,7 @@ def get_criterion(config):
 
 def get_lr_scheduler(config, optimizer):
     match config.dataset:
-        case 'gtzan' | 'halcor' | 'electricity':
+        case 'gtzan' | 'electricity':
             return None
         case 'thumos':
             return torch.optim.lr_scheduler.StepLR(optimizer, config.lr_drop)
@@ -298,12 +290,10 @@ def get_performance(config, preds, labels, performance=None):
         case "thumos":
             preds = np.asarray(preds.detach().cpu()).T[:21]
             labels = np.asarray(labels.detach().cpu()).T[:21]
-            results = {"probs": preds, "labels": labels}
 
-            map, _, mcap, _ = frame_level_map_n_cap(results)
-            batch_performance["mAP"] = map
-            batch_performance["mcAP"] = mcap
-        case 'halcor' | 'electricity':
+            batch_performance["probs"] = [preds]
+            batch_performance["labels"] = [labels]
+        case 'electricity':
             batch_performance['huber_loss'] = criterion_huber(preds, labels) / len(preds)
             batch_performance['MSE_loss'] = criterion_MSE(preds, labels) / len(preds)
             batch_performance['MAE_loss'] = criterion_MAE(preds, labels) / len(preds)
@@ -321,11 +311,20 @@ def get_performance(config, preds, labels, performance=None):
     return performance
 
 def normalize_performance(performance):
-    for key, value in performance.items():
-        if key == "count":
-            continue
-        performance[key] = value / performance["count"]
-    del performance["count"]
+    if config.dataset == 'thumos':
+        preds = np.concatenate(performance['probs'], axis=1)
+        labels = np.concatenate(performance['labels'], axis=1)
+
+        results = {"probs": preds, "labels": labels}
+        map, _, mcap, _ = frame_level_map_n_cap(results)
+
+        performance = {"map": map, "mcap": mcap}
+    else:
+        for key, value in performance.items():
+            if key == "count":
+                continue
+            performance[key] = value / performance["count"]
+        del performance["count"]
     return performance
 
 def evaluate(model, data_loader, config, test_mode=False):
@@ -334,10 +333,6 @@ def evaluate(model, data_loader, config, test_mode=False):
     performance = None
     with torch.no_grad():
         for i, data in enumerate(data_loader):
-            # if test_mode:
-            #     # TODO: Feed data continually when possible
-            #     clean_state(model, config)
-
             out_target, out = forward_data(model, config, data, fill_batch=True, test_mode=test_mode)
 
             performance = get_performance(config, out, out_target, performance)
@@ -432,7 +427,7 @@ def compute_test_accuracy(model, test_loader, config):
 
 def get_data(data, config, cut_sequence=True):
     match config.dataset:
-        case 'gtzan' | 'halcor' | 'electricity':
+        case 'gtzan' | 'electricity':
             features, labels = data
             features = torch.permute(features, (0, 2, 1))
             features = features.to("cuda")
@@ -526,7 +521,6 @@ def fix_landmarks(model, dataset, config, freeze_weights=True, layer_number=0, k
     # features = torch.permute(features, (0, 2, 1))
     features = features.to("cuda")
 
-    # TODO: Not very good code
     if config.num_layers == 1:
         module_index = 3 if config.dataset=="thumos" else 2
         nystrom_module = model[module_index][0][1]
@@ -708,12 +702,3 @@ if __name__ == "__main__":
     config = get_config()
 
     torch_train(config)
-
-    # model, train_performance, val_performance, test_performance = torch_train(config)
-    #
-    # train_dataloader, val_dataloader, test_dataloader = get_data_loaders(config)
-    # from plot_utils import plot_test_sample
-    #
-    # plot_test_sample(config, model, train_dataloader.dataset)
-    # plot_test_sample(config, model, test_dataloader.dataset)
-    # pass

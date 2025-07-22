@@ -1,6 +1,6 @@
 from os import minor
 import os.path as osp
-import pickle # TODO: check if 'import pickle5 as pickle' is needed
+import pickle
 import torch
 import torch.utils.data as data
 import numpy as np
